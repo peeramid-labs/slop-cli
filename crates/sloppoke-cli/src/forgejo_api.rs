@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
@@ -258,6 +259,10 @@ fn signed_request(
     let path_for_sig = path.split_once('?').map(|(p, _)| p).unwrap_or(path);
     let payload = format!("{method}\n{path_for_sig}\n{ts}\n{body_sha}");
     let signature = sign_payload(&cfg.ssh_key_path, &payload)?;
+    // ssh-keygen -Y sign emits a PEM-armored multi-line blob. HTTP
+    // headers can't carry \n, so base64-encode the whole armored
+    // body — server decodes back to the PEM ssh-keygen verify expects.
+    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.as_bytes());
     let pubkey_line = read_pubkey_line(&cfg.ssh_key_path)?;
 
     let client = reqwest::blocking::Client::builder()
@@ -277,10 +282,7 @@ fn signed_request(
         .header("X-Slop-Ts", ts)
         .header("X-Slop-Fingerprint", &cfg.fingerprint)
         .header("X-Slop-Pubkey", pubkey_line)
-        .header(
-            "Authorization",
-            format!("Slop-SSH-Sig {}", signature.trim()),
-        );
+        .header("Authorization", format!("Slop-SSH-Sig {signature_b64}"));
     Ok(req.send()?)
 }
 
