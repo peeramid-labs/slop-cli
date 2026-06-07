@@ -1,6 +1,5 @@
 # slop
 
-[![CI](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/peeramid-labs/slop-cli?label=release)](https://github.com/peeramid-labs/slop-cli/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Homebrew](https://img.shields.io/badge/brew-peeramid--labs%2Ftap%2Fslop-orange.svg)](https://github.com/peeramid-labs/homebrew-tap)
