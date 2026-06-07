@@ -1,0 +1,217 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+  GH_OWNER: peeramid-labs
+  GH_REPO: slop-cli
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            deb_arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            deb_arch: arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+            deb_arch: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            deb_arch: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install cross
+        if: matrix.use_cross
+        run: |
+          cargo install cross --locked || true
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build + package
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p sloppoke-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p sloppoke-cli
+          fi
+          ARCHIVE="slop-${TAG}-${{ matrix.target }}.tar.gz"
+          tar czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" slop
+          if command -v sha256sum >/dev/null; then
+            SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+          else
+            SHA=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+          fi
+          mkdir -p out
+          mv "$ARCHIVE" out/
+          echo "$SHA" > "out/${{ matrix.target }}.sha256"
+          if [ -n "${{ matrix.deb_arch }}" ]; then
+            VERSION="${TAG#v}"
+            BINARY="target/${{ matrix.target }}/release/slop"
+            bash packaging/deb/build-deb.sh "$VERSION" "${{ matrix.deb_arch }}" "$BINARY"
+            mv "slop_${VERSION}_${{ matrix.deb_arch }}.deb" out/
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-${{ matrix.target }}
+          path: out/*
+
+  release-github:
+    name: github release
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ secrets.GH_RELEASE_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: out-*
+          merge-multiple: true
+      - name: Install gh
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gh
+      - name: Create release + upload assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${GH_OWNER}/${GH_REPO}"
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
+              --notes "slop $TAG — see [README](https://github.com/${REPO}#install) for install."
+          fi
+          shopt -s nullglob
+          for f in dist/*.tar.gz dist/*.deb; do
+            gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          done
+
+  update-homebrew:
+    name: homebrew-tap
+    needs: [build, release-github]
+    runs-on: ubuntu-latest
+    if: ${{ secrets.TAP_GITHUB_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: out-*
+          merge-multiple: true
+      - name: Render formula
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA_MAC_ARM=$(cat dist/aarch64-apple-darwin.sha256)
+          SHA_MAC_X86=$(cat dist/x86_64-apple-darwin.sha256)
+          SHA_LIN_ARM=$(cat dist/aarch64-unknown-linux-gnu.sha256)
+          SHA_LIN_X86=$(cat dist/x86_64-unknown-linux-gnu.sha256)
+          sed \
+            -e "s/{{VERSION}}/${VERSION}/g" \
+            -e "s/{{SHA256_MACOS_ARM64}}/${SHA_MAC_ARM}/g" \
+            -e "s/{{SHA256_MACOS_X86_64}}/${SHA_MAC_X86}/g" \
+            -e "s/{{SHA256_LINUX_ARM64}}/${SHA_LIN_ARM}/g" \
+            -e "s/{{SHA256_LINUX_X86_64}}/${SHA_LIN_X86}/g" \
+            packaging/homebrew/slop.rb.template > slop.rb
+      - name: Push to tap
+        shell: bash
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GH_OWNER}/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp slop.rb tap/Formula/slop.rb
+          cd tap
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions@peeramid.xyz"
+          git add Formula/slop.rb
+          git commit -m "slop ${VERSION}" || echo "no change"
+          git push origin main
+
+  update-apt:
+    name: apt-repo
+    needs: [build, release-github]
+    runs-on: ubuntu-latest
+    if: ${{ secrets.APT_GITHUB_TOKEN != '' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: out-*
+          merge-multiple: true
+      - name: Tools
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y dpkg-dev
+      - name: Update apt-repo
+        shell: bash
+        env:
+          APT_TOKEN: ${{ secrets.APT_GITHUB_TOKEN }}
+          GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          git clone "https://x-access-token:${APT_TOKEN}@github.com/${GH_OWNER}/apt-repo.git" apt
+          mkdir -p apt/pool/main apt/dists/stable/main/binary-amd64 apt/dists/stable/main/binary-arm64
+          shopt -s nullglob
+          for f in dist/*.deb; do cp "$f" apt/pool/main/; done
+          cd apt
+          GPG_ID=""
+          if [ -n "${GPG_KEY:-}" ]; then
+            if echo "$GPG_KEY" | grep -q "BEGIN PGP"; then
+              echo "$GPG_KEY" | gpg --batch --import || true
+            else
+              echo "$GPG_KEY" | base64 -d | gpg --batch --import || true
+            fi
+            GPG_ID=$(gpg --list-keys --with-colons | grep '^pub' | head -1 | cut -d: -f5 || true)
+          fi
+          cd pool/main
+          dpkg-scanpackages --arch amd64 . > ../../dists/stable/main/binary-amd64/Packages
+          dpkg-scanpackages --arch arm64 . > ../../dists/stable/main/binary-arm64/Packages
+          cd ../..
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-arm64/Packages
+          cat > dists/stable/Release <<EOF2
+          Origin: peeramid-labs
+          Label: peeramid-labs apt-repo
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Date: $(date -Ru)
+          EOF2
+          if [ -n "$GPG_ID" ]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+              --default-key "$GPG_ID" --detach-sign --armor -o dists/stable/Release.gpg dists/stable/Release || echo "::warning::detach-sign failed"
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+              --default-key "$GPG_ID" --clearsign -o dists/stable/InRelease dists/stable/Release || echo "::warning::clearsign failed"
+          fi
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions@peeramid.xyz"
+          git add -A
+          git commit -m "slop ${GITHUB_REF_NAME#v}" || echo "no change"
+          git push origin main

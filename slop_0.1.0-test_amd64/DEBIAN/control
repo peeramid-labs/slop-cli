@@ -1,0 +1,13 @@
+Package: slop
+Version: 0.1.0-test
+Section: devel
+Priority: optional
+Architecture: amd64
+Maintainer: Peeramid Labs <engineering@peeramid.xyz>
+Homepage: https://github.com/peeramid-labs/slop-cli
+Description: Blazing-fast AI-slop firewall CLI
+ slop scans a unified git diff for AI-pattern scaffolding, naming
+ slop, defensive crud, TODO placeholders, emoji-in-code,
+ restating-code comments, and unused generics. Detection runs
+ server-side; the binary is a thin sender + applier that strips
+ flagged lines and amends HEAD automatically.
