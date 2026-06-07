@@ -4,7 +4,7 @@ members = ["crates/sloppoke-cli"]
 
 [workspace.package]
 edition = "2021"
-version = "0.2.2"
+version = "0.2.3"
 license = "MIT"
 repository = "https://github.com/peeramid-labs/slop-cli"
 
