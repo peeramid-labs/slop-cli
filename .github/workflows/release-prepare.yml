@@ -2,16 +2,6 @@ name: Prepare Release
 
 on:
   workflow_dispatch:
-    inputs:
-      crate:
-        description: 'Crate to release (or "all" for workspace-wide bump)'
-        type: choice
-        options:
-          - all
-          - sdk
-          - agent
-          - orchestrator
-        default: orchestrator
 
 permissions:
   contents: write
@@ -49,14 +39,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Read current version from the target crate's Cargo.toml
-          CRATE="${{ github.event.inputs.crate }}"
-          case "$CRATE" in
-            sdk)          CRATE_DIR="crates/nsed-agent-sdk" ;;
-            agent)        CRATE_DIR="crates/nsed-agent" ;;
-            orchestrator) CRATE_DIR="crates/nsed-orchestrator" ;;
-            all)          CRATE_DIR="crates/nsed-orchestrator" ;;
-          esac
+          # Read current version from the crate's Cargo.toml
+          CRATE_DIR="crates/sloppoke-cli"
           CURRENT=$(grep -m1 '^version' "$CRATE_DIR/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
           echo "Current $CRATE_DIR version: $CURRENT"
 
@@ -102,8 +86,8 @@ jobs:
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "Bump: $BUMP ($CURRENT -> $NEW_VERSION)"
 
-          # Check if release branch already exists (scoped by crate to avoid collisions)
-          BRANCH="release/${CRATE}/v${NEW_VERSION}"
+          # Check if release branch already exists
+          BRANCH="release/slop/v${NEW_VERSION}"
           EXISTING=$(git ls-remote --heads origin "$BRANCH" 2>/dev/null | wc -l)
           if [ "$EXISTING" -gt 0 ]; then
             echo "Release branch $BRANCH already exists — skipping"
@@ -120,8 +104,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
-          CRATE="${{ github.event.inputs.crate }}"
-          BRANCH="release/${CRATE}/v${VERSION}"
+          BRANCH="release/slop/v${VERSION}"
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' || echo "")
           if [ -n "$EXISTING" ]; then
             echo "Release PR #${EXISTING} already exists for ${BRANCH}"
@@ -136,19 +119,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
-          CRATE="${{ github.event.inputs.crate }}"
-          BRANCH="release/${CRATE}/v${VERSION}"
+          BRANCH="release/slop/v${VERSION}"
 
           # Create release branch from dev
           git checkout -b "$BRANCH"
 
-          # Bump version based on selected crate(s)
-          case "$CRATE" in
-            sdk)          cargo set-version -p nsed-agent-sdk "$VERSION" ;;
-            agent)        cargo set-version -p nsed-agent "$VERSION" ;;
-            orchestrator) cargo set-version -p nsed-orchestrator "$VERSION" ;;
-            all)          cargo set-version --workspace "$VERSION" ;;
-          esac
+          # Bump version
+          cargo set-version -p sloppoke-cli "$VERSION"
           cargo generate-lockfile
 
           # Prepend new changelog section (preserves existing hand-curated content)
@@ -197,7 +174,7 @@ jobs:
             echo ""
             echo "---"
             echo ""
-            echo "> Merging this PR will trigger the publish workflow: tag creation, binary builds, Docker push, and GitHub Release."
+            echo "> Merging this PR will trigger the publish workflow: tag creation, binary builds, and GitHub Release."
           } > /tmp/pr-body.md
 
           # Ensure the "release" label exists (create if missing, ignore "already exists" error)

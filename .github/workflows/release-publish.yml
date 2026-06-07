@@ -19,7 +19,6 @@ jobs:
   tag:
     name: Create Tag
     runs-on: ubuntu-latest
-    # Only run when a release PR is merged (not closed without merging)
     if: >
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/')
@@ -29,7 +28,6 @@ jobs:
       changelog_body: ${{ steps.changelog.outputs.body }}
       has_tap_token: ${{ steps.secrets.outputs.has_tap_token }}
       has_apt_token: ${{ steps.secrets.outputs.has_apt_token }}
-      has_docs_token: ${{ steps.secrets.outputs.has_docs_token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,9 +42,7 @@ jobs:
         id: extract
         run: |
           BRANCH="${{ github.event.pull_request.head.ref }}"
-          # Branch is release/<crate>/v0.2.0 or legacy release/v0.2.0
-          # Strip "release/" prefix, then extract version after the last "v",
-          # then strip any leading "v" so legacy branches don't produce "vv1.2.3".
+          # Branch is release/slop/v0.2.0 — strip prefix, take last v
           SUFFIX="${BRANCH#release/}"
           VERSION="${SUFFIX##*/v}"
           VERSION="${VERSION#v}"
@@ -61,12 +57,10 @@ jobs:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
           APT_TOKEN: ${{ secrets.APT_GITHUB_TOKEN }}
           GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          DOCS_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
         run: |
           echo "has_tap_token=$( [ -n "$TAP_TOKEN" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
           echo "has_apt_token=$( [ -n "$APT_TOKEN" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
           echo "has_gpg_key=$( [ -n "$GPG_KEY" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          echo "has_docs_token=$( [ -n "$DOCS_TOKEN" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
 
       - name: Import GPG key
         if: steps.secrets.outputs.has_gpg_key == 'true'
@@ -95,23 +89,10 @@ jobs:
         run: |
           VERSION="${{ steps.extract.outputs.version }}"
           BODY=""
-
-          # Try to extract the version section from CHANGELOG.md (preferred — may have been hand-edited)
           SECTION=$(sed -n "/^## \[${VERSION}\]/,/^## \[/{ /^## \[${VERSION}\]/d; /^## \[/d; p; }" CHANGELOG.md 2>/dev/null || true)
-          if [ -n "$SECTION" ]; then
-            BODY="$SECTION"
-          fi
-
-          # Fallback: use the PR body
-          if [ -z "$BODY" ]; then
-            BODY="$PR_BODY_RAW"
-          fi
-
-          # Last resort: generic message
-          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
-            BODY="Release v${VERSION}"
-          fi
-
+          if [ -n "$SECTION" ]; then BODY="$SECTION"; fi
+          if [ -z "$BODY" ]; then BODY="$PR_BODY_RAW"; fi
+          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then BODY="Release v${VERSION}"; fi
           {
             echo "body<<CHANGELOG_EOF"
             echo "$BODY"
@@ -121,108 +102,40 @@ jobs:
       - name: Delete release branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git push origin --delete "${{ github.event.pull_request.head.ref }}" || true
+        run: git push origin --delete "${{ github.event.pull_request.head.ref }}" || true
 
       - name: Sync released version back to dev
         run: |
           VERSION="${{ steps.extract.outputs.version }}"
-          echo "Syncing version $VERSION back to dev branch"
-
-          # Switch to dev (the merge target — may differ from merge_commit_sha
-          # if the PR was squash-merged and the version bump was lost)
+          TAG="${{ steps.extract.outputs.tag }}"
           git checkout dev
           git pull origin dev
-
-          # Detect which crate(s) were bumped by comparing the release commit's
-          # Cargo.toml versions against what dev currently has.
-          # This preserves independent version cycles — only the crate(s) that
-          # were actually changed in the release branch get synced.
-          TAG="${{ steps.extract.outputs.tag }}"
           CHANGED=false
-          for CRATE_DIR in crates/nsed-agent-sdk crates/nsed-agent crates/nsed-orchestrator; do
-            TOML="$CRATE_DIR/Cargo.toml"
-            [ -f "$TOML" ] || continue
-
-            # Read version from the tagged release commit
+          TOML="crates/sloppoke-cli/Cargo.toml"
+          if [ -f "$TOML" ]; then
             RELEASE_VER=$(git show "$TAG:$TOML" 2>/dev/null | grep -m1 '^version' | sed 's/.*"\(.*\)".*/\1/' || true)
             DEV_VER=$(grep -m1 '^version' "$TOML" | sed 's/.*"\(.*\)".*/\1/')
-
             if [ -n "$RELEASE_VER" ] && [ "$RELEASE_VER" != "$DEV_VER" ]; then
-              echo "Syncing $CRATE_DIR: $DEV_VER → $RELEASE_VER"
               sed -i "s/^version = \".*\"/version = \"$RELEASE_VER\"/" "$TOML"
               CHANGED=true
-            else
-              echo "Skipping $CRATE_DIR (already at $DEV_VER)"
             fi
-          done
-
-          # Also sync workspace root Cargo.toml if it has a version field
+          fi
           ROOT_RELEASE_VER=$(git show "$TAG:Cargo.toml" 2>/dev/null | grep -m1 '^version' | sed 's/.*"\(.*\)".*/\1/' || true)
           ROOT_DEV_VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           if [ -n "$ROOT_RELEASE_VER" ] && [ "$ROOT_RELEASE_VER" != "$ROOT_DEV_VER" ]; then
-            echo "Syncing workspace root: $ROOT_DEV_VER → $ROOT_RELEASE_VER"
             sed -i "s/^version = \".*\"/version = \"$ROOT_RELEASE_VER\"/" Cargo.toml
             CHANGED=true
           fi
-
           if [ "$CHANGED" = "true" ]; then
             cargo generate-lockfile
-            git add -u Cargo.toml Cargo.lock crates/*/Cargo.toml
-            if git diff --cached --quiet; then
-              echo "No version changes to commit"
-            else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -u Cargo.toml Cargo.lock crates/sloppoke-cli/Cargo.toml
+            if ! git diff --cached --quiet; then
               git commit -m "chore(release): sync version from $TAG to dev"
               git push origin dev
             fi
-          else
-            echo "All crate versions already in sync — nothing to do"
           fi
-
-  publish-crates:
-    name: Publish to crates.io
-    needs: tag
-    runs-on: ubuntu-latest
-    # Only publish when CARGO_REGISTRY_TOKEN is configured
-    if: needs.tag.outputs.tag != ''
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag.outputs.tag }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Start NATS for compile check
-        run: |
-          docker run -d --name nats -p 4222:4222 nats:latest -js
-          sleep 2
-
-      - name: Publish nsed-agent-sdk
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish -p nsed-agent-sdk || echo "nsed-agent-sdk already published"
-
-      - name: Wait for crates.io index
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: sleep 60
-
-      - name: Publish nsed-agent
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish -p nsed-agent || echo "nsed-agent already published"
-
-      - name: Wait for crates.io index
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: sleep 60
-
-      - name: Publish nsed-orchestrator
-        if: env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish -p nsed-orchestrator || echo "nsed-orchestrator already published"
-
-      - name: Cleanup
-        if: always()
-        run: docker stop nats 2>/dev/null || true
 
   build-binaries:
     name: Build ${{ matrix.target }}
@@ -240,7 +153,7 @@ jobs:
             use_cross: true
             deb_arch: arm64
           - target: x86_64-apple-darwin
-            os: macos-15-intel
+            os: macos-13
             use_cross: false
             deb_arch: ""
           - target: aarch64-apple-darwin
@@ -270,24 +183,23 @@ jobs:
         if: matrix.use_cross
         run: |
           cargo binstall --no-confirm --force cross
-          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cross --version
 
       - name: Build
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --release --target ${{ matrix.target }} -p sloppoke-cli
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} -p sloppoke-cli
           fi
 
-      - name: Package binary
+      - name: Package slop binary
         run: |
           TAG="${{ needs.tag.outputs.tag }}"
           TARGET="${{ matrix.target }}"
-          ARCHIVE="nsed-orchestrator-${TAG}-${TARGET}.tar.gz"
-          tar czf "${ARCHIVE}" -C "target/${TARGET}/release" nsed-orchestrator
+          ARCHIVE="slop-${TAG}-${TARGET}.tar.gz"
+          tar czf "${ARCHIVE}" -C "target/${TARGET}/release" slop
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Compute SHA256
@@ -299,110 +211,34 @@ jobs:
             SHA=$(shasum -a 256 "${{ env.ARCHIVE }}" | awk '{print $1}')
           fi
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
-          echo "SHA256: $SHA"
 
       - name: Build .deb package
         if: matrix.deb_arch != ''
         run: |
           VERSION="${{ needs.tag.outputs.version }}"
           ARCH="${{ matrix.deb_arch }}"
-          BINARY="target/${{ matrix.target }}/release/nsed-orchestrator"
+          BINARY="target/${{ matrix.target }}/release/slop"
           bash packaging/deb/build-deb.sh "$VERSION" "$ARCH" "$BINARY"
-          echo "DEB_FILE=nsed-orchestrator_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
+          echo "DEB_FILE=slop_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
 
-      - name: Upload tarball artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-      - name: Upload .deb artifact
+      - uses: actions/upload-artifact@v4
         if: matrix.deb_arch != ''
-        uses: actions/upload-artifact@v4
         with:
           name: deb-${{ matrix.deb_arch }}
           path: ${{ env.DEB_FILE }}
 
-      # Write sha256 to a file for the Homebrew job to collect
       - name: Write SHA256 file
-        run: |
-          echo "${{ steps.sha.outputs.sha256 }}" > "${{ matrix.target }}.sha256"
+        run: echo "${{ steps.sha.outputs.sha256 }}" > "${{ matrix.target }}.sha256"
 
-      - name: Upload SHA256 file
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: sha256-file-${{ matrix.target }}
           path: ${{ matrix.target }}.sha256
-
-      # ── nsed CLI binary (unified client/serve CLI) ──────────────────────
-      - name: Package CLI binary
-        run: |
-          TAG="${{ needs.tag.outputs.tag }}"
-          TARGET="${{ matrix.target }}"
-          CLI_ARCHIVE="nsed-${TAG}-${TARGET}.tar.gz"
-          tar czf "${CLI_ARCHIVE}" -C "target/${TARGET}/release" nsed
-          echo "CLI_ARCHIVE=${CLI_ARCHIVE}" >> "$GITHUB_ENV"
-
-      - name: Compute CLI SHA256
-        id: cli_sha
-        run: |
-          if command -v sha256sum &>/dev/null; then
-            SHA=$(sha256sum "${{ env.CLI_ARCHIVE }}" | awk '{print $1}')
-          else
-            SHA=$(shasum -a 256 "${{ env.CLI_ARCHIVE }}" | awk '{print $1}')
-          fi
-          echo "cli_sha256=$SHA" >> "$GITHUB_OUTPUT"
-          echo "CLI SHA256: $SHA"
-
-      - name: Build CLI .deb package
-        if: matrix.deb_arch != ''
-        run: |
-          VERSION="${{ needs.tag.outputs.version }}"
-          ARCH="${{ matrix.deb_arch }}"
-          BINARY="target/${{ matrix.target }}/release/nsed"
-          bash packaging/deb/build-deb-cli.sh "$VERSION" "$ARCH" "$BINARY"
-          echo "CLI_DEB_FILE=nsed_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
-
-      - name: Upload CLI tarball artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-cli-${{ matrix.target }}
-          path: ${{ env.CLI_ARCHIVE }}
-
-      - name: Write CLI SHA256 file
-        run: |
-          echo "${{ steps.cli_sha.outputs.cli_sha256 }}" > "${{ matrix.target }}-cli.sha256"
-
-      - name: Upload CLI SHA256 file
-        uses: actions/upload-artifact@v4
-        with:
-          name: sha256-file-cli-${{ matrix.target }}
-          path: ${{ matrix.target }}-cli.sha256
-
-      - name: Upload CLI .deb artifact
-        if: matrix.deb_arch != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: deb-cli-${{ matrix.deb_arch }}
-          path: ${{ env.CLI_DEB_FILE }}
-
-      # Only Linux targets are consumed by publish-docker-agent (macOS builds
-      # produce Mach-O binaries that have no use in a linux/amd64|arm64 image).
-      - name: Package agent binary
-        if: matrix.deb_arch != ''
-        run: |
-          TAG="${{ needs.tag.outputs.tag }}"
-          TARGET="${{ matrix.target }}"
-          AGENT_ARCHIVE="nsed-agent-${TAG}-${TARGET}.tar.gz"
-          tar czf "${AGENT_ARCHIVE}" -C "target/${TARGET}/release" nsed-agent
-          echo "AGENT_ARCHIVE=${AGENT_ARCHIVE}" >> "$GITHUB_ENV"
-
-      - name: Upload agent tarball artifact
-        if: matrix.deb_arch != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-binary-${{ matrix.target }}
-          path: ${{ env.AGENT_ARCHIVE }}
 
   release:
     name: Create GitHub Release
@@ -411,22 +247,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: binary-*
           merge-multiple: true
 
-      - name: Download all .deb artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: debs
           pattern: deb-*
           merge-multiple: true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.tag.outputs.tag }}
           name: ${{ needs.tag.outputs.tag }}
@@ -435,9 +268,6 @@ jobs:
             artifacts/*.tar.gz
             debs/*.deb
           generate_release_notes: false
-        # Note: binary-* matches both binary-<target> (orchestrator) and
-        # binary-cli-<target> (nsed CLI), so all tarballs are included.
-        # deb-* matches both deb-<arch> and deb-cli-<arch>.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -445,86 +275,55 @@ jobs:
     name: Update Homebrew Tap
     needs: [tag, build-binaries, release]
     runs-on: ubuntu-latest
-    # Only run if the TAP_GITHUB_TOKEN secret is configured
     if: needs.tag.outputs.has_tap_token == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
-      - name: Download all SHA256 files
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: shasums
           pattern: sha256-file-*
           merge-multiple: true
 
-      - name: Generate Homebrew formulas
+      - name: Generate Homebrew formula
         run: |
           VERSION="${{ needs.tag.outputs.version }}"
-
-          # nsed-orchestrator formula
-          SHA_MACOS_ARM64=$(cat shasums/aarch64-apple-darwin.sha256)
-          SHA_MACOS_X86_64=$(cat shasums/x86_64-apple-darwin.sha256)
-          SHA_LINUX_ARM64=$(cat shasums/aarch64-unknown-linux-gnu.sha256)
-          SHA_LINUX_X86_64=$(cat shasums/x86_64-unknown-linux-gnu.sha256)
-
+          SHA_MAC_ARM=$(cat shasums/aarch64-apple-darwin.sha256)
+          SHA_MAC_X86=$(cat shasums/x86_64-apple-darwin.sha256)
+          SHA_LIN_ARM=$(cat shasums/aarch64-unknown-linux-gnu.sha256)
+          SHA_LIN_X86=$(cat shasums/x86_64-unknown-linux-gnu.sha256)
           sed \
             -e "s/{{VERSION}}/${VERSION}/g" \
-            -e "s/{{SHA256_MACOS_ARM64}}/${SHA_MACOS_ARM64}/g" \
-            -e "s/{{SHA256_MACOS_X86_64}}/${SHA_MACOS_X86_64}/g" \
-            -e "s/{{SHA256_LINUX_ARM64}}/${SHA_LINUX_ARM64}/g" \
-            -e "s/{{SHA256_LINUX_X86_64}}/${SHA_LINUX_X86_64}/g" \
-            "packaging/homebrew/nsed-orchestrator.rb.template" > nsed-orchestrator.rb
-
-          echo "--- Generated nsed-orchestrator formula ---"
-          cat nsed-orchestrator.rb
-
-          # nsed CLI formula (sha256 files have -cli suffix)
-          CLI_SHA_MACOS_ARM64=$(cat "shasums/aarch64-apple-darwin-cli.sha256")
-          CLI_SHA_MACOS_X86_64=$(cat "shasums/x86_64-apple-darwin-cli.sha256")
-          CLI_SHA_LINUX_ARM64=$(cat "shasums/aarch64-unknown-linux-gnu-cli.sha256")
-          CLI_SHA_LINUX_X86_64=$(cat "shasums/x86_64-unknown-linux-gnu-cli.sha256")
-
-          sed \
-            -e "s/{{VERSION}}/${VERSION}/g" \
-            -e "s/{{SHA256_MACOS_ARM64}}/${CLI_SHA_MACOS_ARM64}/g" \
-            -e "s/{{SHA256_MACOS_X86_64}}/${CLI_SHA_MACOS_X86_64}/g" \
-            -e "s/{{SHA256_LINUX_ARM64}}/${CLI_SHA_LINUX_ARM64}/g" \
-            -e "s/{{SHA256_LINUX_X86_64}}/${CLI_SHA_LINUX_X86_64}/g" \
-            "packaging/homebrew/nsed.rb.template" > nsed.rb
-
-          echo "--- Generated nsed CLI formula ---"
-          cat nsed.rb
+            -e "s/{{SHA256_MACOS_ARM64}}/${SHA_MAC_ARM}/g" \
+            -e "s/{{SHA256_MACOS_X86_64}}/${SHA_MAC_X86}/g" \
+            -e "s/{{SHA256_LINUX_ARM64}}/${SHA_LIN_ARM}/g" \
+            -e "s/{{SHA256_LINUX_X86_64}}/${SHA_LIN_X86}/g" \
+            packaging/homebrew/slop.rb.template > slop.rb
 
       - name: Push to Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.tag.outputs.version }}"
-          TAP_REPO="peeramid-labs/homebrew-tap"
-
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap-repo
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/peeramid-labs/homebrew-tap.git" tap-repo
           mkdir -p tap-repo/Formula
-          cp nsed-orchestrator.rb tap-repo/Formula/nsed-orchestrator.rb
-          cp nsed.rb tap-repo/Formula/nsed.rb
-
+          cp slop.rb tap-repo/Formula/slop.rb
           cd tap-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/nsed-orchestrator.rb Formula/nsed.rb
-          git commit -m "nsed ${VERSION}" || echo "No changes to commit"
+          git add Formula/slop.rb
+          git commit -m "slop ${VERSION}" || echo "No changes to commit"
           git push origin main
 
   update-apt:
     name: Update APT Repository
     needs: [tag, build-binaries, release]
     runs-on: ubuntu-latest
-    # Only run if the APT_GITHUB_TOKEN secret is configured
     if: needs.tag.outputs.has_apt_token == 'true'
     steps:
-      - name: Download .deb artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: debs
           pattern: deb-*
@@ -540,262 +339,43 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
         run: |
           VERSION="${{ needs.tag.outputs.version }}"
-          APT_REPO="peeramid-labs/apt-repo"
-
-          git clone "https://x-access-token:${APT_TOKEN}@github.com/${APT_REPO}.git" apt-repo
+          git clone "https://x-access-token:${APT_TOKEN}@github.com/peeramid-labs/apt-repo.git" apt-repo
           mkdir -p apt-repo/pool/main
-
-          # Copy new .deb files
           cp debs/*.deb apt-repo/pool/main/
-
           cd apt-repo
-
-          # Import GPG key if available (needed for signed repos).
-          # Handles both ASCII-armored and base64-encoded private keys.
           GPG_ID=""
           if [ -n "${GPG_KEY:-}" ]; then
             if echo "$GPG_KEY" | grep -q "BEGIN PGP"; then
-              echo "$GPG_KEY" | gpg --batch --import || echo "::warning::GPG key import failed"
+              echo "$GPG_KEY" | gpg --batch --import || echo "::warning::GPG import failed"
             else
-              echo "$GPG_KEY" | base64 -d | gpg --batch --import || echo "::warning::GPG key import (base64) failed"
+              echo "$GPG_KEY" | base64 -d | gpg --batch --import || echo "::warning::GPG import (base64) failed"
             fi
             GPG_ID=$(gpg --list-keys --with-colons 2>/dev/null | grep '^pub' | head -1 | cut -d: -f5 || true)
-            if [ -n "$GPG_ID" ]; then
-              echo "GPG key imported: $GPG_ID"
-            else
-              echo "::warning::No GPG key found after import — APT repo will not be signed"
-            fi
           fi
-
-          # Generate Packages index
-          mkdir -p dists/stable/main/binary-amd64
-          mkdir -p dists/stable/main/binary-arm64
-
+          mkdir -p dists/stable/main/binary-amd64 dists/stable/main/binary-arm64
           cd pool/main
           dpkg-scanpackages --arch amd64 . > ../../dists/stable/main/binary-amd64/Packages
           dpkg-scanpackages --arch arm64 . > ../../dists/stable/main/binary-arm64/Packages
           cd ../..
-
           gzip -k -f dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-arm64/Packages
-
-          # Generate Release file
-          printf '%s\n' \
-            "Origin: Peeramid Labs" \
-            "Label: NSED" \
-            "Suite: stable" \
-            "Codename: stable" \
-            "Architectures: amd64 arm64" \
-            "Components: main" \
-            "Description: NSED Orchestrator APT Repository" \
-            > dists/stable/Release
-
-          # Add checksums to Release file
-          {
-            echo "SHA256:"
-            for f in dists/stable/main/binary-*/Packages*; do
-              SIZE=$(wc -c < "$f")
-              SHA=$(sha256sum "$f" | awk '{print $1}')
-              REL_PATH="${f#dists/stable/}"
-              printf " %s %s %s\n" "$SHA" "$SIZE" "$REL_PATH"
-            done
-          } >> dists/stable/Release
-
-          # Sign if GPG key available
-          if [ -n "${GPG_ID:-}" ]; then
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${GPG_PASSPHRASE:-}" \
-              -abs -o dists/stable/Release.gpg dists/stable/Release
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${GPG_PASSPHRASE:-}" \
-              --clearsign -o dists/stable/InRelease dists/stable/Release
+          cat > dists/stable/Release <<EOF2
+          Origin: peeramid-labs
+          Label: peeramid-labs apt-repo
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Date: $(date -Ru)
+          EOF2
+          if [ -n "$GPG_ID" ]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+              --default-key "$GPG_ID" --detach-sign --armor -o dists/stable/Release.gpg dists/stable/Release || true
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+              --default-key "$GPG_ID" --clearsign -o dists/stable/InRelease dists/stable/Release || true
           fi
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Release nsed-orchestrator ${VERSION}" || echo "No changes"
+          git commit -m "slop ${VERSION}" || echo "No changes"
           git push origin main
-
-  publish-docker:
-    name: Publish Docker Image (ghcr.io)
-    needs: [tag, build-binaries]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read   # actions/checkout
-      packages: write  # ghcr.io image push
-    # Runs in parallel with release/update-homebrew/update-apt — only the
-    # pre-built Linux binaries from build-binaries are needed, no recompile.
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag.outputs.tag }}
-
-      # Download the two Linux binaries produced by build-binaries.
-      # These are tarballs — we unpack them into dist/{arch}/ so that
-      # Dockerfile.release's `COPY dist/${TARGETARCH}/nsed-orchestrator` resolves.
-      - name: Download linux/amd64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-x86_64-unknown-linux-gnu
-          path: /tmp/bins/amd64
-
-      - name: Download linux/arm64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-aarch64-unknown-linux-gnu
-          path: /tmp/bins/arm64
-
-      - name: Unpack binaries into Docker build context
-        run: |
-          mkdir -p dist/amd64 dist/arm64
-          tar xzf /tmp/bins/amd64/*.tar.gz -C dist/amd64
-          tar xzf /tmp/bins/arm64/*.tar.gz -C dist/arm64
-          # Sanity check — both binaries must be executable ELF files.
-          for ARCH in amd64 arm64; do
-            BIN="dist/${ARCH}/nsed-orchestrator"
-            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
-            FILE_OUT=$(file "$BIN")
-            echo "$FILE_OUT"
-            echo "$FILE_OUT" | grep -q "ELF" || { echo "::error::$BIN is not an ELF binary (got: $FILE_OUT)"; exit 1; }
-          done
-          echo "Both binaries are executable ELF files"
-
-      # QEMU is required so Buildx can assemble the arm64 layers on an amd64 runner.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build time for this job: ~1-2 min (apt-get + layer copy only, no Rust compile).
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.release
-          platforms: linux/amd64,linux/arm64
-          push: true
-          # :latest always points to the newest release; :vX.Y.Z is immutable.
-          tags: |
-            ghcr.io/peeramid-labs/nsed:latest
-            ghcr.io/peeramid-labs/nsed:${{ needs.tag.outputs.tag }}
-          # Layer-level cache stored in GitHub Actions cache.
-          # Subsequent releases reuse the base Debian + apt layers — only the
-          # binary COPY layer rebuilds, keeping the job under 2 minutes.
-          cache-from: type=gha,scope=docker-release
-          cache-to: type=gha,mode=max,scope=docker-release
-          labels: |
-            org.opencontainers.image.title=nsed-orchestrator
-            org.opencontainers.image.description=NATS-based multi-agent deliberation orchestrator
-            org.opencontainers.image.version=${{ needs.tag.outputs.version }}
-            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=BUSL-1.1
-
-  publish-docker-agent:
-    name: Publish Agent Docker Image (ghcr.io)
-    needs: [tag, build-binaries]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read   # actions/checkout
-      packages: write  # ghcr.io image push
-    # Runs in parallel with publish-docker — only the pre-built Linux agent
-    # binaries from build-binaries are needed, no recompile.
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag.outputs.tag }}
-
-      # Download the two Linux agent binaries produced by build-binaries.
-      # Unpack into dist-agent/{arch}/ so Dockerfile.agent.release's
-      # `COPY dist-agent/${TARGETARCH}/nsed-agent` resolves correctly.
-      - name: Download linux/amd64 agent binary
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary-x86_64-unknown-linux-gnu
-          path: /tmp/agent-bins/amd64
-
-      - name: Download linux/arm64 agent binary
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary-aarch64-unknown-linux-gnu
-          path: /tmp/agent-bins/arm64
-
-      - name: Unpack agent binaries into Docker build context
-        run: |
-          mkdir -p dist-agent/amd64 dist-agent/arm64
-          tar xzf /tmp/agent-bins/amd64/*.tar.gz -C dist-agent/amd64
-          tar xzf /tmp/agent-bins/arm64/*.tar.gz -C dist-agent/arm64
-          # Sanity check — both binaries must be executable ELF files.
-          for ARCH in amd64 arm64; do
-            BIN="dist-agent/${ARCH}/nsed-agent"
-            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
-            FILE_OUT=$(file "$BIN")
-            echo "$FILE_OUT"
-            echo "$FILE_OUT" | grep -q "ELF" || { echo "::error::$BIN is not an ELF binary (got: $FILE_OUT)"; exit 1; }
-          done
-          echo "Both agent binaries are executable ELF files"
-
-      # QEMU is required so Buildx can assemble the arm64 layers on an amd64 runner.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build time: ~1 min (apt-get + binary COPY only, no Rust compile).
-      - name: Build and push multi-arch agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.agent.release
-          platforms: linux/amd64,linux/arm64
-          push: true
-          # :latest always points to the newest release; :vX.Y.Z is immutable.
-          tags: |
-            ghcr.io/peeramid-labs/nsed-agent:latest
-            ghcr.io/peeramid-labs/nsed-agent:${{ needs.tag.outputs.tag }}
-          cache-from: type=gha,scope=docker-release-agent
-          cache-to: type=gha,mode=max,scope=docker-release-agent
-          labels: |
-            org.opencontainers.image.title=nsed-agent
-            org.opencontainers.image.description=NATS-based multi-agent deliberation worker
-            org.opencontainers.image.version=${{ needs.tag.outputs.version }}
-            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=BUSL-1.1
-
-  notify-docs:
-    name: Trigger Docs Update
-    needs: [tag, release]
-    runs-on: ubuntu-latest
-    # Only runs when DOCS_REPO_TOKEN secret is configured
-    if: needs.tag.outputs.has_docs_token == 'true'
-    steps:
-      - name: Dispatch to docs repo
-        env:
-          DOCS_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
-          DOCS_REPO: ${{ vars.DOCS_REPO || 'peeramid-labs/nsed-docs' }}
-        run: |
-          curl -fsSL \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${DOCS_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${DOCS_REPO}/dispatches" \
-            -d "{\"event_type\":\"release\",\"client_payload\":{\"tag\":\"${{ needs.tag.outputs.tag }}\",\"version\":\"${{ needs.tag.outputs.version }}\"}}"

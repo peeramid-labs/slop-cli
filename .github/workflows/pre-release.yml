@@ -115,35 +115,21 @@ jobs:
             cargo build --release --locked --target ${{ matrix.target }}
           fi
 
-      - name: Package orchestrator binary
+      - name: Package slop binary
         run: |
           TAG="${{ needs.validate.outputs.tag }}"
           TARGET="${{ matrix.target }}"
-          ARCHIVE="nsed-orchestrator-${TAG}-${TARGET}.tar.gz"
-          tar czf "${ARCHIVE}" -C "target/${TARGET}/release" nsed-orchestrator
+          ARCHIVE="slop-${TAG}-${TARGET}.tar.gz"
+          tar czf "${ARCHIVE}" -C "target/${TARGET}/release" slop
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
-      - name: Upload orchestrator tarball
+      - name: Upload slop tarball
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-      - name: Package CLI binary
-        run: |
-          TAG="${{ needs.validate.outputs.tag }}"
-          TARGET="${{ matrix.target }}"
-          CLI_ARCHIVE="nsed-${TAG}-${TARGET}.tar.gz"
-          tar czf "${CLI_ARCHIVE}" -C "target/${TARGET}/release" nsed
-          echo "CLI_ARCHIVE=${CLI_ARCHIVE}" >> "$GITHUB_ENV"
-
-      - name: Upload CLI tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-cli-${{ matrix.target }}
-          path: ${{ env.CLI_ARCHIVE }}
-
-      - name: Build CLI .deb package
+      - name: Build slop .deb package
         if: matrix.deb_arch != ''
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
@@ -153,32 +139,16 @@ jobs:
           VERSION="${VERSION#v}"
           VERSION=$(echo "$VERSION" | sed 's/-/~/' | sed 's/-/./g')
           ARCH="${{ matrix.deb_arch }}"
-          BINARY="target/${{ matrix.target }}/release/nsed"
-          bash packaging/deb/build-deb-cli.sh "$VERSION" "$ARCH" "$BINARY"
-          echo "CLI_DEB_FILE=nsed_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
+          BINARY="target/${{ matrix.target }}/release/slop"
+          bash packaging/deb/build-deb.sh "$VERSION" "$ARCH" "$BINARY"
+          echo "DEB_FILE=slop_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
 
-      - name: Upload CLI .deb artifact
+      - name: Upload slop .deb artifact
         if: matrix.deb_arch != ''
         uses: actions/upload-artifact@v4
         with:
-          name: deb-cli-${{ matrix.deb_arch }}
-          path: ${{ env.CLI_DEB_FILE }}
-
-      - name: Package agent binary
-        if: matrix.deb_arch != ''
-        run: |
-          TAG="${{ needs.validate.outputs.tag }}"
-          TARGET="${{ matrix.target }}"
-          AGENT_ARCHIVE="nsed-agent-${TAG}-${TARGET}.tar.gz"
-          tar czf "${AGENT_ARCHIVE}" -C "target/${TARGET}/release" nsed-agent
-          echo "AGENT_ARCHIVE=${AGENT_ARCHIVE}" >> "$GITHUB_ENV"
-
-      - name: Upload agent tarball
-        if: matrix.deb_arch != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-binary-${{ matrix.target }}
-          path: ${{ env.AGENT_ARCHIVE }}
+          name: deb-${{ matrix.deb_arch }}
+          path: ${{ env.DEB_FILE }}
 
   tag:
     name: Create Pre-Release Tag
@@ -214,13 +184,6 @@ jobs:
         with:
           path: artifacts
           pattern: binary-*
-          merge-multiple: true
-
-      - name: Download agent binary artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: agent-binary-*
           merge-multiple: true
 
       - name: Download .deb artifacts
@@ -266,134 +229,3 @@ jobs:
           TAG: ${{ needs.validate.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-
-  publish-docker:
-    name: Publish Docker Image (ghcr.io)
-    needs: [validate, build-binaries, tag]
-    if: ${{ !inputs.skip_docker }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download linux/amd64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-x86_64-unknown-linux-gnu
-          path: /tmp/bins/amd64
-
-      - name: Download linux/arm64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binary-aarch64-unknown-linux-gnu
-          path: /tmp/bins/arm64
-
-      - name: Unpack binaries into Docker build context
-        run: |
-          mkdir -p dist/amd64 dist/arm64
-          tar xzf /tmp/bins/amd64/*.tar.gz -C dist/amd64
-          tar xzf /tmp/bins/arm64/*.tar.gz -C dist/arm64
-          for ARCH in amd64 arm64; do
-            BIN="dist/${ARCH}/nsed-orchestrator"
-            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
-            file "$BIN" | grep -q "ELF" || { echo "::error::$BIN is not ELF"; exit 1; }
-          done
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.release
-          platforms: linux/amd64,linux/arm64
-          push: true
-          # Pre-releases do NOT get :latest — only the versioned tag.
-          tags: ghcr.io/peeramid-labs/nsed:${{ needs.validate.outputs.tag }}
-          cache-from: type=gha,scope=docker-prerelease
-          cache-to: type=gha,mode=max,scope=docker-prerelease
-          labels: |
-            org.opencontainers.image.title=nsed-orchestrator
-            org.opencontainers.image.description=NATS-based multi-agent deliberation orchestrator (pre-release)
-            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
-            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=BUSL-1.1
-
-  publish-docker-agent:
-    name: Publish Agent Docker Image (ghcr.io)
-    needs: [validate, build-binaries, tag]
-    if: ${{ !inputs.skip_docker }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download linux/amd64 agent binary
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary-x86_64-unknown-linux-gnu
-          path: /tmp/agent-bins/amd64
-
-      - name: Download linux/arm64 agent binary
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary-aarch64-unknown-linux-gnu
-          path: /tmp/agent-bins/arm64
-
-      - name: Unpack agent binaries into Docker build context
-        run: |
-          mkdir -p dist-agent/amd64 dist-agent/arm64
-          tar xzf /tmp/agent-bins/amd64/*.tar.gz -C dist-agent/amd64
-          tar xzf /tmp/agent-bins/arm64/*.tar.gz -C dist-agent/arm64
-          for ARCH in amd64 arm64; do
-            BIN="dist-agent/${ARCH}/nsed-agent"
-            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
-            file "$BIN" | grep -q "ELF" || { echo "::error::$BIN is not ELF"; exit 1; }
-          done
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push multi-arch agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.agent.release
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/peeramid-labs/nsed-agent:${{ needs.validate.outputs.tag }}
-          cache-from: type=gha,scope=docker-prerelease-agent
-          cache-to: type=gha,mode=max,scope=docker-prerelease-agent
-          labels: |
-            org.opencontainers.image.title=nsed-agent
-            org.opencontainers.image.description=NATS-based multi-agent deliberation worker (pre-release)
-            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
-            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=BUSL-1.1
