@@ -1,0 +1,399 @@
+name: Pre-Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Pre-release tag (e.g. v0.6.0-alpha.1)"
+        required: true
+        type: string
+      skip_docker:
+        description: "Skip Docker image builds"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: pre-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Validate pre-release tag format
+        id: check
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+
+          # Must be a valid pre-release semver with Docker-safe characters only
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$'; then
+            echo "::error::Tag must be a pre-release semver like v0.6.0-alpha.1 (alphanumeric, hyphens, dots only)"
+            exit 1
+          fi
+
+          # Docker/OCI tags must be ≤128 characters
+          if [ ${#TAG} -gt 128 ]; then
+            echo "::error::Tag exceeds 128 character OCI limit (got ${#TAG})"
+            exit 1
+          fi
+
+          # Must NOT be a stable release (no pre-release suffix)
+          if echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Use the normal release workflow for stable releases"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Pre-release: $TAG (version: $VERSION)"
+
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            deb_arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+            deb_arch: arm64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            use_cross: false
+            deb_arch: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            deb_arch: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pre-release-${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: cargo-bins/cargo-binstall@v1.17.9
+      - name: Install cross via binstall
+        if: matrix.use_cross
+        run: |
+          cargo binstall --no-confirm --force cross
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cross --version
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+
+      - name: Package orchestrator binary
+        run: |
+          TAG="${{ needs.validate.outputs.tag }}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE="nsed-orchestrator-${TAG}-${TARGET}.tar.gz"
+          tar czf "${ARCHIVE}" -C "target/${TARGET}/release" nsed-orchestrator
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload orchestrator tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+
+      - name: Package CLI binary
+        run: |
+          TAG="${{ needs.validate.outputs.tag }}"
+          TARGET="${{ matrix.target }}"
+          CLI_ARCHIVE="nsed-${TAG}-${TARGET}.tar.gz"
+          tar czf "${CLI_ARCHIVE}" -C "target/${TARGET}/release" nsed
+          echo "CLI_ARCHIVE=${CLI_ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload CLI tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-cli-${{ matrix.target }}
+          path: ${{ env.CLI_ARCHIVE }}
+
+      - name: Build CLI .deb package
+        if: matrix.deb_arch != ''
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          # Normalize pre-release version to Debian format:
+          # strip leading v, then convert first hyphen to ~ and remaining to .
+          # e.g. 0.6.0-rc-1 -> 0.6.0~rc.1  (~ sorts before final release in dpkg)
+          VERSION="${VERSION#v}"
+          VERSION=$(echo "$VERSION" | sed 's/-/~/' | sed 's/-/./g')
+          ARCH="${{ matrix.deb_arch }}"
+          BINARY="target/${{ matrix.target }}/release/nsed"
+          bash packaging/deb/build-deb-cli.sh "$VERSION" "$ARCH" "$BINARY"
+          echo "CLI_DEB_FILE=nsed_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
+
+      - name: Upload CLI .deb artifact
+        if: matrix.deb_arch != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-cli-${{ matrix.deb_arch }}
+          path: ${{ env.CLI_DEB_FILE }}
+
+      - name: Package agent binary
+        if: matrix.deb_arch != ''
+        run: |
+          TAG="${{ needs.validate.outputs.tag }}"
+          TARGET="${{ matrix.target }}"
+          AGENT_ARCHIVE="nsed-agent-${TAG}-${TARGET}.tar.gz"
+          tar czf "${AGENT_ARCHIVE}" -C "target/${TARGET}/release" nsed-agent
+          echo "AGENT_ARCHIVE=${AGENT_ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload agent tarball
+        if: matrix.deb_arch != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-binary-${{ matrix.target }}
+          path: ${{ env.AGENT_ARCHIVE }}
+
+  tag:
+    name: Create Pre-Release Tag
+    needs: [validate, build-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ needs.validate.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Delete existing tag if re-running (pre-releases are mutable)
+          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+          git tag -f "${TAG}" -m "Pre-release ${TAG}"
+          git push origin "${TAG}"
+
+  release:
+    name: Create GitHub Pre-Release
+    needs: [validate, build-binaries, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Download agent binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: agent-binary-*
+          merge-multiple: true
+
+      - name: Download .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: debs
+          pattern: deb-*
+          merge-multiple: true
+
+      # On immutable-release repos, softprops/action-gh-release publishes
+      # immediately (even with prerelease: true), making re-runs impossible.
+      # Use gh CLI with draft→publish to ensure assets are attached before
+      # the release becomes immutable. Delete any existing release first so
+      # re-runs work cleanly.
+      - name: Delete existing release if re-running
+        run: gh release delete "$TAG" --yes 2>/dev/null || true
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Create draft release with assets
+        run: |
+          NOTES=$(printf "Pre-release build from \`%s\` branch.\n\n⚠️ **This is a pre-release** — not recommended for production use.\n\nCommit: %s" "$REF_NAME" "$COMMIT_SHA")
+
+          gh release create "$TAG" \
+            --draft \
+            --prerelease \
+            --title "$TAG" \
+            --generate-notes \
+            --notes "$NOTES" \
+            artifacts/*.tar.gz debs/*.deb
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Publish draft release
+        run: gh release edit "$TAG" --draft=false
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+  publish-docker:
+    name: Publish Docker Image (ghcr.io)
+    needs: [validate, build-binaries, tag]
+    if: ${{ !inputs.skip_docker }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download linux/amd64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-x86_64-unknown-linux-gnu
+          path: /tmp/bins/amd64
+
+      - name: Download linux/arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-aarch64-unknown-linux-gnu
+          path: /tmp/bins/arm64
+
+      - name: Unpack binaries into Docker build context
+        run: |
+          mkdir -p dist/amd64 dist/arm64
+          tar xzf /tmp/bins/amd64/*.tar.gz -C dist/amd64
+          tar xzf /tmp/bins/arm64/*.tar.gz -C dist/arm64
+          for ARCH in amd64 arm64; do
+            BIN="dist/${ARCH}/nsed-orchestrator"
+            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
+            file "$BIN" | grep -q "ELF" || { echo "::error::$BIN is not ELF"; exit 1; }
+          done
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Pre-releases do NOT get :latest — only the versioned tag.
+          tags: ghcr.io/peeramid-labs/nsed:${{ needs.validate.outputs.tag }}
+          cache-from: type=gha,scope=docker-prerelease
+          cache-to: type=gha,mode=max,scope=docker-prerelease
+          labels: |
+            org.opencontainers.image.title=nsed-orchestrator
+            org.opencontainers.image.description=NATS-based multi-agent deliberation orchestrator (pre-release)
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=BUSL-1.1
+
+  publish-docker-agent:
+    name: Publish Agent Docker Image (ghcr.io)
+    needs: [validate, build-binaries, tag]
+    if: ${{ !inputs.skip_docker }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download linux/amd64 agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-binary-x86_64-unknown-linux-gnu
+          path: /tmp/agent-bins/amd64
+
+      - name: Download linux/arm64 agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-binary-aarch64-unknown-linux-gnu
+          path: /tmp/agent-bins/arm64
+
+      - name: Unpack agent binaries into Docker build context
+        run: |
+          mkdir -p dist-agent/amd64 dist-agent/arm64
+          tar xzf /tmp/agent-bins/amd64/*.tar.gz -C dist-agent/amd64
+          tar xzf /tmp/agent-bins/arm64/*.tar.gz -C dist-agent/arm64
+          for ARCH in amd64 arm64; do
+            BIN="dist-agent/${ARCH}/nsed-agent"
+            [ -x "$BIN" ] || { echo "::error::$BIN is not executable"; exit 1; }
+            file "$BIN" | grep -q "ELF" || { echo "::error::$BIN is not ELF"; exit 1; }
+          done
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agent.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/peeramid-labs/nsed-agent:${{ needs.validate.outputs.tag }}
+          cache-from: type=gha,scope=docker-prerelease-agent
+          cache-to: type=gha,mode=max,scope=docker-prerelease-agent
+          labels: |
+            org.opencontainers.image.title=nsed-agent
+            org.opencontainers.image.description=NATS-based multi-agent deliberation worker (pre-release)
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.source=https://github.com/peeramid-labs/nsed
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=BUSL-1.1

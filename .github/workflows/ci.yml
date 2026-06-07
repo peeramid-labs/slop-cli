@@ -1,19 +1,369 @@
 name: CI
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  fmt-clippy-test:
+  # ── Fast lint & audit (no NATS, no instrumentation) ────────────────
+  lint:
+    name: Lint & Audit
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace --bins
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: "ci-lint-v1"
+
+      - name: Install Tools (binstall)
+        uses: cargo-bins/cargo-binstall@v1.17.9
+
+      - name: Install cargo-deny
+        run: |
+          cargo binstall --no-confirm --force cargo-deny
+          cargo deny --version
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: License & Advisory Audit
+        run: cargo deny check
+
+  # ── Supply-chain freshness (only when Cargo.lock changes) ──────────
+  dep-age:
+    name: Dependency Age Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need enough history for the dep-age script to resolve the
+          # diff target (PR base or HEAD~1 on push events) via
+          # `git show <ref>:Cargo.lock`. Depth 2 covers push events;
+          # for PR events GitHub Actions already fetches the base
+          # commit as part of the merge-commit setup.
+          fetch-depth: 2
+
+      - name: Check if Cargo.lock changed
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            lockfile:
+              - 'Cargo.lock'
+
+      - name: Dependency Age Check (supply-chain freshness)
+        if: steps.filter.outputs.lockfile == 'true'
+        env:
+          # Only set on pull_request events; empty on pushes.
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          target_arg=""
+          if [ -n "${PR_BASE_SHA}" ]; then
+            # PR: diff the working-copy lockfile against the merge base.
+            # The base SHA is already in the local clone via the actions/checkout
+            # merge-commit setup, so `git show` can resolve it directly.
+            target_arg="--target ${PR_BASE_SHA}"
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            # Push: diff against the previous commit. Scopes the scan to
+            # just the packages introduced by this push. Falls back to a
+            # full scan automatically inside the script on a new repo
+            # with no HEAD~1 reachable.
+            target_arg="--target HEAD~1"
+          fi
+          # Word-splitting of $target_arg is intentional — either "" or
+          # "--target <sha>".
+          # shellcheck disable=SC2086
+          python3 scripts/check-dep-age.py --min-age-days 7 $target_arg
+
+      - name: Skip (Cargo.lock unchanged)
+        if: steps.filter.outputs.lockfile != 'true'
+        run: echo "Cargo.lock unchanged — skipping dep-age check"
+
+  # ── Tests + coverage (NATS required, LLVM instrumentation) ─────────
+  test:
+    name: Test & Coverage
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # - name: Free Disk Space
+      #   run: |
+      #     sudo rm -rf /usr/share/dotnet
+      #     sudo rm -rf /opt/ghc
+      #     sudo rm -rf "/usr/local/share/boost"
+      #     sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      # - name: Set Swap Space
+      #   uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
+      #   with:
+      #     swap-size-gb: 2
+
+      - name: Start NATS (JetStream)
+        run: |
+          # Attach NATS to the same per-workflow network as this job container,
+          # so it is reachable by DNS alias "nats" without publishing host ports.
+          # Unique name avoids collisions across parallel runs/retries.
+          JOB_CT=$(hostname)
+          JOB_NET=$(docker inspect "$JOB_CT" \
+            --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+          NAME="nats-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d \
+            --name "$NAME" \
+            --network "$JOB_NET" \
+            --network-alias nats \
+            nats:alpine -js -m 8222
+          echo "NATS_NAME=$NAME" >> $GITHUB_ENV
+
+          # Wait for NATS HTTP monitoring to be ready (probe via DNS alias)
+          echo "Waiting for NATS..."
+          for i in $(seq 1 30); do
+            if docker run --rm --network "$JOB_NET" curlimages/curl:latest \
+               -sf http://nats:8222/varz > /dev/null 2>&1; then
+              echo "NATS is up."
+              exit 0
+            fi
+            if ! docker ps --filter "name=$NAME" --filter "status=running" -q | grep -q .; then
+              echo "❌ NATS container died. Logs:"
+              docker logs "$NAME"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "❌ NATS failed to respond within 30s. Logs:"
+          docker logs "$NAME"
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: "ci-test-v1"
+
+      - name: Install Tools (binstall)
+        uses: cargo-bins/cargo-binstall@v1.17.9
+
+      - name: Install cargo-llvm-cov
+        run: |
+          cargo binstall --no-confirm --force cargo-llvm-cov
+          cargo llvm-cov --version
+
+      - name: Set up Environment Variables
+        run: |
+          # NATS reachable via DNS alias on per-workflow network
+          echo "NATS_URL=nats://nats:4222" >> $GITHUB_ENV
+          echo "RUST_LOG=info" >> $GITHUB_ENV
+          echo "TEST_OLLAMA_MODEL=qwen2.5:3b" >> $GITHUB_ENV
+          echo "APP_PROVIDERS__OLLAMA__CONCURRENCY=1" >> $GITHUB_ENV
+          echo "CARGO_BUILD_JOBS=4" >> $GITHUB_ENV
+
+      - name: Run Tests & Coverage
+        run: |
+          # Run workspace tests with LLVM source-based coverage.
+          # cargo llvm-cov compiles with instrumentation in a single pass.
+          # Run 1: --no-report collects profdata without generating a report.
+          # Run 2: --no-clean merges with Run 1 profdata (prints text summary to stdout, ignored).
+          # Final reports generated separately via `cargo llvm-cov report`.
+          #
+          # --ignore-filename-regex excludes files from coverage reporting:
+          #   main.rs, bin/, recovery/, test helpers, and all-ignored integration tests.
+          IGNORE_RE="(src/main\.rs|src/bin/|recovery/|tests/together_|tests/evaluation_|tests/ollama_|tests/harmony_|tests/deliberation_|tests/benchmark_|tests/router/common\.rs)"
+
+          # Run 1: Workspace lib & bin tests (no integration tests)
+          cargo llvm-cov --workspace --no-report --lib --bins \
+            -- --skip test_multi_round_deliberation_3_agents
+
+          # Run 2: NATS-dependent #[ignore] lib unit tests.
+          # --lib: only src/ tests — integration test binaries (tests/*.rs, e.g. ollama)
+          #        are excluded and only run when i-tests label is set.
+          # --no-clean: merges profdata with Run 1.
+          SKIP_RUN2=(
+            test_docker_sandbox_lifecycle
+            test_teardown_of_nonexistent_container
+            test_solidity_sandbox_lifecycle
+            settings_new_with_env
+          )
+          SKIP_RUN2_ARGS=$(printf -- '--skip %s ' "${SKIP_RUN2[@]}")
+          cargo llvm-cov --no-clean -p nsed-orchestrator --lib \
+            -- --ignored $SKIP_RUN2_ARGS
+
+          mkdir -p coverage
+          cargo llvm-cov report \
+            --ignore-filename-regex "$IGNORE_RE" \
+            --cobertura --output-path coverage/cobertura.xml
+
+          cargo llvm-cov report \
+            --ignore-filename-regex "$IGNORE_RE" \
+            --html --output-dir coverage
+
+      - name: Extract coverage
+        id: coverage
+        run: python3 scripts/extract-coverage.py coverage/cobertura.xml
+
+      # Stores badge data + HTML report on gh-pages branch.
+      # Use `scripts/update-badges.sh` locally to update README badges from this data.
+      - name: Publish coverage to gh-pages
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          PERCENT: ${{ steps.coverage.outputs.percent }}
+          COLOR: ${{ steps.coverage.outputs.color }}
+          PACKAGES_JSON: ${{ steps.coverage.outputs.packages_json }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p /tmp/ghpages
+
+          # badges.json — consumed by scripts/update-badges.sh
+          jq -n \
+            --arg cov "$PERCENT" \
+            --arg color "$COLOR" \
+            --argjson pkgs "${PACKAGES_JSON:-{\}}" \
+            --arg branch "$BRANCH" \
+            '{coverage:$cov, coverage_color:$color, packages:$pkgs, branch:$branch}' \
+            > /tmp/ghpages/badges.json
+
+          # Legacy coverage.json for backward compatibility
+          jq -n \
+            --arg pct "${PERCENT}%" \
+            --arg color "$COLOR" \
+            --arg branch "$BRANCH" \
+            '{schemaVersion:1, label:"coverage", message:$pct, color:$color, branch:$branch}' \
+            > /tmp/ghpages/coverage.json
+
+          # Copy HTML coverage report if available (llvm-cov outputs to html/ subdir)
+          if [ -f coverage/html/index.html ]; then
+            cp -r coverage/html/* /tmp/ghpages/
+            echo "📄 HTML coverage report included"
+          fi
+
+          cd /tmp/ghpages
+          git init -q
+          git checkout --orphan gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "ci: coverage ${PERCENT}% (${BRANCH}) [skip ci]"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push origin gh-pages --force
+
+      # Full integration suite (LLM-dependent tests: ollama, together, etc.)
+      # Only runs when explicitly requested via label or workflow_dispatch.
+      - name: Run LLM Integration Tests
+        if: >
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'i-tests')) ||
+          github.event_name == 'workflow_dispatch'
+        run: |
+          cargo test --tests --jobs 2
+
+      - name: Cleanup NATS
+        if: always()
+        run: docker rm -f "${NATS_NAME:-nats-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}" || true
+
+  shellcheck:
+    name: Shell Script Lint
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck dpkg
+
+      - name: Lint packaging scripts
+        run: |
+          shellcheck packaging/deb/build-deb.sh
+          shellcheck packaging/deb/build-deb-cli.sh
+          shellcheck packaging/tests/test-build-deb-cli.sh
+
+      - name: Run packaging tests
+        run: bash packaging/tests/test-build-deb-cli.sh
+
+  typos:
+    name: Spell Check
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@master
+
+  docker-verify:
+    name: Verify Docker Build
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Self-hosted runner: docker daemon is persistent (colima VM /var/lib/docker
+      # on vdb1, 100GB datadisk). Daemon's native layer cache survives across
+      # CI runs, so we don't need an Actions Cache layer for buildx.
+      # Using the default docker driver (not docker-container) keeps builds in
+      # the host daemon where layers already live; subsequent builds reuse them
+      # without any cache-from/cache-to round-trip.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: nsed-orchestrator:ci

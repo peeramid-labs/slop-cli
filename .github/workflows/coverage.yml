@@ -1,0 +1,194 @@
+name: Update Coverage
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  coverage:
+    name: Run Coverage & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
+        with:
+          swap-size-gb: 2
+
+      - name: Start NATS (JetStream)
+        run: |
+          # Per-workflow network attachment + unique name; avoids host port collisions.
+          JOB_CT=$(hostname)
+          JOB_NET=$(docker inspect "$JOB_CT" \
+            --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+          NAME="nats-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d \
+            --name "$NAME" \
+            --network "$JOB_NET" \
+            --network-alias nats \
+            nats:alpine -js -m 8222
+          echo "NATS_NAME=$NAME" >> $GITHUB_ENV
+
+          echo "Waiting for NATS..."
+          for i in $(seq 1 30); do
+            if docker run --rm --network "$JOB_NET" curlimages/curl:latest \
+               -sf http://nats:8222/varz > /dev/null 2>&1; then
+              echo "NATS is up."
+              exit 0
+            fi
+            if ! docker ps --filter "name=$NAME" --filter "status=running" -q | grep -q .; then
+              echo "❌ NATS container died. Logs:"
+              docker logs "$NAME"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "❌ NATS failed to respond within 30s. Logs:"
+          docker logs "$NAME"
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: "ci-tools-v3"
+
+      - name: Install Tools (binstall)
+        uses: cargo-bins/cargo-binstall@v1.17.9
+
+      - name: Install cargo-llvm-cov
+        run: |
+          cargo binstall --no-confirm --force cargo-llvm-cov
+          cargo llvm-cov --version
+
+      - name: Set up Environment Variables
+        run: |
+          echo "NATS_URL=nats://nats:4222" >> $GITHUB_ENV
+          echo "RUST_LOG=info" >> $GITHUB_ENV
+          echo "CARGO_BUILD_JOBS=4" >> $GITHUB_ENV
+
+      - name: Run Tests & Coverage
+        run: |
+          # Run all workspace tests with LLVM source-based coverage.
+          # Uses compile-time instrumentation (no ptrace overhead like tarpaulin).
+          IGNORE_RE="(src/main\.rs|src/bin/|recovery/|tests/together_|tests/evaluation_|tests/ollama_|tests/harmony_|tests/deliberation_|tests/benchmark_|tests/router/common\.rs)"
+
+          # Clean previous coverage data
+          cargo llvm-cov clean --workspace
+
+          # Run 1: All workspace tests (non-ignored)
+          cargo llvm-cov --workspace --no-report \
+            -- --skip test_multi_round_deliberation_3_agents
+
+          # Run 2: NATS-dependent #[ignore] tests that CI can run.
+          # Uses --no-clean to merge coverage with Run 1.
+          cargo llvm-cov --no-report --no-clean \
+            -p nsed-orchestrator \
+            -- --ignored \
+            --skip test_docker_sandbox_lifecycle \
+            --skip test_teardown_of_nonexistent_container \
+            --skip test_solidity_sandbox_lifecycle \
+            --skip settings_new_with_env
+
+          mkdir -p coverage
+          cargo llvm-cov report \
+            --ignore-filename-regex "$IGNORE_RE" \
+            --cobertura --output-path coverage/cobertura.xml
+
+          cargo llvm-cov report \
+            --ignore-filename-regex "$IGNORE_RE" \
+            --html --output-dir coverage
+
+      - name: Extract coverage
+        id: coverage
+        run: python3 scripts/extract-coverage.py coverage/cobertura.xml
+
+      - name: Publish coverage to gh-pages
+        env:
+          PERCENT: ${{ steps.coverage.outputs.percent }}
+          COLOR: ${{ steps.coverage.outputs.color }}
+          PACKAGES_JSON: ${{ steps.coverage.outputs.packages_json }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p /tmp/ghpages
+
+          # badges.json — consumed by scripts/update-badges.sh
+          jq -n \
+            --arg cov "$PERCENT" \
+            --arg color "$COLOR" \
+            --argjson pkgs "${PACKAGES_JSON:-{\}}" \
+            --arg branch "$BRANCH" \
+            '{coverage:$cov, coverage_color:$color, packages:$pkgs, branch:$branch}' \
+            > /tmp/ghpages/badges.json
+
+          # Legacy coverage.json
+          jq -n \
+            --arg pct "${PERCENT}%" \
+            --arg color "$COLOR" \
+            --arg branch "$BRANCH" \
+            '{schemaVersion:1, label:"coverage", message:$pct, color:$color, branch:$branch}' \
+            > /tmp/ghpages/coverage.json
+
+          # HTML coverage report (llvm-cov outputs to html/ subdir)
+          if [ -f coverage/html/index.html ]; then
+            cp -r coverage/html/* /tmp/ghpages/
+            echo "📄 HTML coverage report included"
+          fi
+
+          cd /tmp/ghpages
+          git init -q
+          git checkout --orphan gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "ci: coverage ${PERCENT}% (${BRANCH}) [skip ci]"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push origin gh-pages --force
+
+      - name: Coverage Summary
+        env:
+          PERCENT: ${{ steps.coverage.outputs.percent }}
+          COLOR: ${{ steps.coverage.outputs.color }}
+          PACKAGES_JSON: ${{ steps.coverage.outputs.packages_json }}
+        run: |
+          echo "## 📊 Coverage Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Workspace** | **${PERCENT}%** |" >> "$GITHUB_STEP_SUMMARY"
+          # Emit per-package rows if available
+          if [ -n "$PACKAGES_JSON" ] && [ "$PACKAGES_JSON" != "{}" ]; then
+            echo "$PACKAGES_JSON" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          for k, v in sorted(d.items()):
+              print(f'| {k} | {v}% |')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          fi
+          echo "| Badge color | \`${COLOR}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Coverage published to \`gh-pages\` branch ([view report](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/))." >> "$GITHUB_STEP_SUMMARY"
+          echo "Run \`scripts/update-badges.sh\` locally to update README badges." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup NATS
+        if: always()
+        run: docker rm -f "${NATS_NAME:-nats-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}" || true

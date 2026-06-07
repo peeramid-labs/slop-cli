@@ -1,0 +1,74 @@
+name: Commit Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+
+jobs:
+  commit-lint:
+    name: Validate PR Title
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Skip for release PRs
+        if: startsWith(github.event.pull_request.head.ref, 'release/')
+        run: echo "⏭️ Skipping commit lint for release PR"
+
+      - uses: actions/checkout@v4
+        if: "!startsWith(github.event.pull_request.head.ref, 'release/')"
+        with:
+          fetch-depth: 0
+
+      - name: Validate or fix PR title
+        if: "!startsWith(github.event.pull_request.head.ref, 'release/')"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          PATTERN='^([Ff]eat|[Ff]ix|[Dd]ocs|[Ss]tyle|[Rr]efactor|[Pp]erf|[Tt]est|[Bb]uild|[Cc][Ii]|[Cc]hore|[Rr]evert)(\(.+\))?(!)?: .+'
+
+          # 1. Check if PR title already follows conventional commits
+          if [[ "$PR_TITLE" =~ $PATTERN ]]; then
+            echo "✅ PR title is valid: $PR_TITLE"
+            exit 0
+          fi
+
+          echo "⚠️  PR title is not conventional: $PR_TITLE"
+          echo "Scanning PR commits for a conventional commit message..."
+
+          # 2. Scan PR commits for a conventional commit to use as title
+          SUGGESTED=""
+          while IFS= read -r MSG; do
+            if [[ "$MSG" =~ $PATTERN ]]; then
+              SUGGESTED="$MSG"
+              break
+            fi
+          done < <(git log "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" --format="%s" --reverse)
+
+          # 3. If found, update the PR title automatically
+          if [ -n "$SUGGESTED" ]; then
+            echo "📝 Found conventional commit: $SUGGESTED"
+            echo "Updating PR title..."
+            gh pr edit "$PR_NUMBER" --title "$SUGGESTED"
+            echo "✅ PR title updated to: $SUGGESTED"
+            exit 0
+          fi
+
+          # 4. No conventional commit found anywhere — fail with guidance
+          echo ""
+          echo "::error::PR title does not follow Conventional Commits and no conventional commit found in PR history."
+          echo ""
+          echo "Expected: <type>(<optional scope>): <description>"
+          echo "Got:      $PR_TITLE"
+          echo ""
+          echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+          echo ""
+          echo "Release impact:"
+          echo "  feat:                        -> minor version bump (0.1.0 -> 0.2.0)"
+          echo "  fix, perf, refactor, etc.    -> patch version bump (0.2.0 -> 0.2.1)"
+          echo "  <type>!: (any type with !)   -> major version bump (0.2.1 -> 1.0.0)"
+          echo "  docs, test, ci, chore, style -> changelog only, no version bump"
+          exit 1
