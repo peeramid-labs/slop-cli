@@ -59,9 +59,21 @@ struct LoginArgs {
 
 #[derive(Parser, Debug, Clone)]
 struct PokeArgs {
-    /// Unified-diff file to scan. Required.
-    #[arg(long)]
-    patch: PathBuf,
+    /// Unified-diff file. Overrides the default `git diff` capture.
+    #[arg(long, conflicts_with_all = ["staged", "range", "since"])]
+    patch: Option<PathBuf>,
+    /// Scan the staged index instead of the working tree
+    /// (equivalent to `git diff --cached`).
+    #[arg(long, conflicts_with_all = ["patch", "range", "since"])]
+    staged: bool,
+    /// Custom git diff range, passed verbatim to `git diff`.
+    /// Examples: `main..HEAD`, `HEAD~3..HEAD`, `origin/main...`.
+    #[arg(long, conflicts_with_all = ["patch", "staged", "since"])]
+    range: Option<String>,
+    /// Scan only changes since a given ref (equivalent to
+    /// `git diff <ref>`). Handy for "what's new since main".
+    #[arg(long, conflicts_with_all = ["patch", "staged", "range"])]
+    since: Option<String>,
     /// Optional `<source-org>/<project>` tag the server uses to
     /// bucket the row in the learn store. Not billing-relevant.
     #[arg(long)]
@@ -191,15 +203,15 @@ fn derive_key_from_pubkey(p: &Path) -> PathBuf {
 fn run_poke(args: PokeArgs) -> Result<()> {
     let cfg = forgejo_api::load_config()
         .context("`slop poke` needs a server config. Run `slop login` first.")?;
-    let patch = fs::read_to_string(&args.patch)
-        .with_context(|| format!("read patch file {}", args.patch.display()))?;
+    let (patch, source) = resolve_patch(&args)?;
     if patch.trim().is_empty() {
-        bail!("patch is empty");
+        bail!("nothing to scan ({source})");
     }
     if args.dry_run {
         let preview = serde_json::json!({
             "project": args.project,
             "patch_bytes": patch.len(),
+            "source": source,
         });
         println!("{}", serde_json::to_string_pretty(&preview)?);
         return Ok(());
@@ -344,6 +356,51 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
     git_run(&["commit", "--amend", "--no-edit"])?;
     eprintln!("slop: HEAD amended.");
     Ok(())
+}
+
+/// Choose what to send to `slop poke`. Precedence (clap enforces
+/// mutual exclusion at parse time): `--patch` > `--staged` >
+/// `--range` > `--since` > default `git diff HEAD` (working tree
+/// versus HEAD). Returns the raw patch + a short human label of
+/// where it came from for error / dry-run output.
+fn resolve_patch(args: &PokeArgs) -> Result<(String, String)> {
+    if let Some(p) = args.patch.as_ref() {
+        let body =
+            fs::read_to_string(p).with_context(|| format!("read patch file {}", p.display()))?;
+        return Ok((body, format!("--patch {}", p.display())));
+    }
+    if args.staged {
+        return Ok((
+            git_diff(&["--cached"])?,
+            "--staged (git diff --cached)".into(),
+        ));
+    }
+    if let Some(r) = args.range.as_deref() {
+        return Ok((git_diff(&[r])?, format!("--range {r}")));
+    }
+    if let Some(s) = args.since.as_deref() {
+        return Ok((git_diff(&[s])?, format!("--since {s}")));
+    }
+    Ok((git_diff(&["HEAD"])?, "git diff HEAD (default)".into()))
+}
+
+fn git_diff(extra: &[&str]) -> Result<String> {
+    let mut argv: Vec<&str> = vec!["diff", "--no-color"];
+    argv.extend_from_slice(extra);
+    let out = Command::new("git")
+        .args(&argv)
+        .output()
+        .with_context(|| format!("spawn git {}", argv.join(" ")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        bail!(
+            "git {} failed (exit {:?}): {}",
+            argv.join(" "),
+            out.status.code(),
+            stderr.trim()
+        );
+    }
+    Ok(String::from_utf8(out.stdout)?)
 }
 
 fn git_run(args: &[&str]) -> Result<()> {

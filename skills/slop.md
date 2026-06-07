@@ -16,14 +16,17 @@ account.
 ## Pre-commit flow
 
 ```bash
-# 1. stage your changes
 git add -A
+slop poke --staged          # scan the staged index
+```
 
-# 2. dump the staged diff to a patch file
-git diff --cached > /tmp/staged.patch
+Other scopes:
 
-# 3. scan
-slop poke --patch /tmp/staged.patch
+```bash
+slop poke                    # working tree vs HEAD (default)
+slop poke --range main..HEAD # everything diverged from main
+slop poke --since main       # equivalent shorthand
+slop poke --patch foo.patch  # raw unified-diff file
 ```
 
 If verdict is `LGTM`, commit normally.

@@ -18,7 +18,10 @@ fn slop_help_lists_every_subcommand() {
     let out = cmd.arg("--help").assert().success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     for sub in ["login", "poke", "apply", "learn", "billing"] {
-        assert!(stdout.contains(sub), "missing subcommand {sub} in help: {stdout}");
+        assert!(
+            stdout.contains(sub),
+            "missing subcommand {sub} in help: {stdout}"
+        );
     }
 }
 
@@ -27,13 +30,31 @@ fn slop_version_renders() {
     let mut cmd = Command::cargo_bin("slop").unwrap();
     let out = cmd.arg("--version").assert().success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("slop"), "expected slop in version: {stdout}");
+    assert!(
+        stdout.contains("slop"),
+        "expected slop in version: {stdout}"
+    );
 }
 
 #[test]
-fn poke_requires_patch_file() {
+fn poke_without_config_fails_with_login_hint() {
+    let dir = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("slop").unwrap();
-    cmd.args(["poke"]).assert().failure();
+    cmd.env("SLOP_CONFIG_DIR", dir.path())
+        .args(["poke"])
+        .assert()
+        .failure()
+        .stderr(contains("slop login"));
+}
+
+#[test]
+fn poke_rejects_mutually_exclusive_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("slop").unwrap();
+    cmd.env("SLOP_CONFIG_DIR", dir.path())
+        .args(["poke", "--staged", "--range", "main..HEAD"])
+        .assert()
+        .failure();
 }
 
 #[test]
@@ -41,7 +62,8 @@ fn poke_dry_run_without_login_fails_with_config_message() {
     let dir = tempfile::tempdir().unwrap();
     let patch = dir.path().join("p.patch");
     let mut f = std::fs::File::create(&patch).unwrap();
-    f.write_all(b"diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+hi\n").unwrap();
+    f.write_all(b"diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+hi\n")
+        .unwrap();
     let mut cmd = Command::cargo_bin("slop").unwrap();
     cmd.env("SLOP_CONFIG_DIR", dir.path())
         .args(["poke", "--patch"])

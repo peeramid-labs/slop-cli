@@ -1,9 +1,5 @@
 # slop
 
-<p align="center">
-  <img src="./assets/mascot.png" alt="slop mascot" width="500"/>
-</p>
-
 [![CI](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/peeramid-labs/slop-cli?label=release)](https://github.com/peeramid-labs/slop-cli/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -11,29 +7,38 @@
 [![APT](https://img.shields.io/badge/apt-peeramid--labs%2Fapt--repo-blue.svg)](https://github.com/peeramid-labs/apt-repo)
 [![Server: slop.peeramid.xyz](https://img.shields.io/badge/server-slop.peeramid.xyz-green.svg)](https://slop.peeramid.xyz/)
 
+<p align="center">
+  <img src="./assets/mascot.png" alt="slop mascot" width="500"/>
+</p>
+
 **Blazing-fast AI-slop firewall for your git workflow.** Sub-10ms
 verdict per patch. Learns from every correction you ship.
 
 ```
-slop poke --patch <file>   # instant scan
+slop poke                  # scan working tree vs HEAD (default)
+slop poke --staged         # scan the staged index
+slop poke --range main..HEAD
+slop poke --since main     # everything that diverged from main
+slop poke --patch foo.patch
 slop apply                 # auto-clean flagged lines, amend HEAD
 slop learn "this was a false positive on src/foo.rs"
 ```
 
 ## What it catches
 
-| category | what it kills |
+| kind | what it is |
 |---|---|
-| AI scaffolding   | `// Step 1:` / `// Initialize the X` / `// Helper function for …` |
-| Naming slop      | `process_data`, `class XManager`, `let data1 = …`, `getStuff()` |
-| Defensive crud   | `except: pass`, `} catch (Exception) {}`, redundant null guards |
-| Half-finished    | `TODO: implement`, `unimplemented!()`, `raise NotImplementedError` |
-| Emoji-in-code    | any emoji in source — almost always LLM signature |
-| Restating code   | comments that just paraphrase the line below them |
-| Dead generics    | type parameters declared but never used |
+| AI scaffolding   | Numbered "Step N" / "First, …" / "Now we will …" comments that document the act of writing the code instead of explaining the code. |
+| Naming slop      | Vague verb-led functions and Manager/Helper/Util class names — placeholder identifiers an LLM reaches for when the real name would require thought. |
+| Defensive crud   | Empty exception swallows and redundant null guards added "so it doesn't crash" instead of fixing the underlying assumption. |
+| Half-finished    | Unfinished-business markers: TODO/FIXME asking the next reader to implement the actual logic. |
+| Emoji-in-code    | Emoji embedded in source. Almost never deliberate in a real codebase; nearly always an LLM autograph. |
+| Restating code   | Comments that paraphrase the line below them instead of explaining WHY. |
+| Dead generics    | Type parameters declared but never referenced — speculative abstraction. |
 
-The detection engine runs server-side, so the catalog is always the
-latest version — no re-install needed to benefit from improvements.
+The detection engine improves continuously, server-side, so the
+catalog you scan against today is always the latest one — no
+re-install needed.
 
 ## Install
 
@@ -68,7 +73,7 @@ unpack, drop `slop` into your `$PATH`.
 
 ```
 slop login                     # SSH-key handshake; cache identity
-slop poke --patch <file>       # first call: 402 + Stripe Checkout URL
+slop poke                      # first call: 402 + Stripe Checkout URL
                                # pay → next call lands findings + plan
 slop apply                     # auto-strip flagged lines, amend HEAD
 slop learn "false positive"    # shapes future scans
@@ -76,14 +81,6 @@ slop learn "false positive"    # shapes future scans
 
 `slop apply` runs `git apply` + `git commit --amend` locally. Use
 `--no-commit` if you want to inspect the staged diff first.
-
-## Pricing
-
-| plan | price | quota |
-|---|---|---|
-| Slop Poke | $20 / month | 100,000 pokes |
-
-Quota resets on the first of each month.
 
 ## Learns as you go
 
