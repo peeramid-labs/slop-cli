@@ -92,13 +92,17 @@ jobs:
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "Bump: $BUMP ($CURRENT -> $NEW_VERSION)"
 
-          # Check if release branch already exists
+          # Note whether the release branch already exists on the
+          # remote. We DON'T skip here — if the branch is leftover from
+          # a half-failed run (e.g. previous gh failure), we still want
+          # the PR-creation step to recover by opening a PR against the
+          # existing branch.
           BRANCH="release/slop/v${NEW_VERSION}"
-          EXISTING=$(git ls-remote --heads origin "$BRANCH" 2>/dev/null | wc -l)
-          if [ "$EXISTING" -gt 0 ]; then
-            echo "Release branch $BRANCH already exists — skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ "$(git ls-remote --heads origin "$BRANCH" 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "Release branch $BRANCH already on remote — will reuse"
+            echo "branch_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
@@ -128,17 +132,24 @@ jobs:
           fi
 
       - name: Create release branch and PR
-        if: steps.bump.outputs.skip != 'true' && steps.existing.outputs.exists != 'true'
+        if: steps.existing.outputs.exists != 'true'
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORGEJO_API: ${{ github.api_url }}
           REPO: ${{ github.repository }}
+          BRANCH_EXISTS: ${{ steps.bump.outputs.branch_exists }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
           BRANCH="release/slop/v${VERSION}"
 
-          # Create release branch from dev
-          git checkout -b "$BRANCH"
+          # Branch may be leftover from a previous half-failed run.
+          # Reuse it; otherwise cut a fresh one from dev.
+          if [ "$BRANCH_EXISTS" = "true" ]; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/${BRANCH}"
+          else
+            git checkout -b "$BRANCH"
+          fi
 
           # Bump version
           # --workspace bumps [workspace.package].version which the
@@ -174,12 +185,24 @@ jobs:
           git add -u Cargo.toml Cargo.lock crates/*/Cargo.toml 2>/dev/null || true
           [ -f CHANGELOG.md ] && git add -u CHANGELOG.md || true
           if git diff --cached --quiet; then
-            echo "No version changes needed — creating empty release commit"
-            git commit --allow-empty -m "chore(release): v${VERSION}"
+            if [ "$BRANCH_EXISTS" = "true" ]; then
+              echo "Reused branch already at v${VERSION} — no new commit"
+            else
+              echo "No version changes needed — creating empty release commit"
+              git commit --allow-empty -m "chore(release): v${VERSION}"
+            fi
           else
             git commit -m "chore(release): v${VERSION}"
           fi
-          git push origin "$BRANCH"
+          # Push only if local HEAD differs from origin's branch tip.
+          # For a fresh branch the remote ref is absent → diff exits
+          # non-zero → push. For a reused-and-unchanged branch the
+          # diff is silent → skip push.
+          if ! git diff --quiet "origin/${BRANCH}" 2>/dev/null; then
+            git push origin "$BRANCH"
+          else
+            echo "No new commits to push for $BRANCH"
+          fi
 
           # Generate PR body from changelog
           CHANGELOG_BODY=$(git-cliff --tag "v${VERSION}" --unreleased --strip header 2>/dev/null || echo "Release v${VERSION}")
