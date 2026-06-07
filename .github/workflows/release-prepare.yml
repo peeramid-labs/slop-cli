@@ -196,16 +196,15 @@ jobs:
           # Commit changes (if any — version may already match Cargo.toml)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Stage workspace root + lockfile explicitly. Previous glob
-          # form `crates/*/Cargo.toml` silently swallowed errors via
-          # `2>/dev/null || true` and produced empty release commits
-          # when shell-glob behaviour or path quoting tripped up.
-          # sloppoke-cli's crate manifest uses `version.workspace = true`
-          # so it inherits the bump from the workspace root and never
-          # needs its own staging.
+          # Stage workspace root manifest only. Cargo.lock is in
+          # .gitignore by repo convention; sloppoke-cli's crate
+          # manifest uses `version.workspace = true` so it inherits the
+          # bump from the workspace root and never needs its own
+          # staging either. Previous glob form silently swallowed
+          # errors and produced empty release commits.
           echo "── pre-stage status ──"
           git status --short
-          git add -- Cargo.toml Cargo.lock
+          git add -- Cargo.toml
           [ -f CHANGELOG.md ] && git add -- CHANGELOG.md || true
           echo "── post-stage status ──"
           git status --short
