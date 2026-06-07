@@ -11,12 +11,12 @@
 [![APT](https://img.shields.io/badge/apt-peeramid--labs%2Fapt--repo-blue.svg)](https://github.com/peeramid-labs/apt-repo)
 [![Server: slop.peeramid.xyz](https://img.shields.io/badge/server-slop.peeramid.xyz-green.svg)](https://slop.peeramid.xyz/)
 
-**Blazing-fast AI-slop firewall for your git workflow.** One command,
-~10ms per patch, learns from every false-positive you flag.
+**Blazing-fast AI-slop firewall for your git workflow.** Sub-10ms
+verdict per patch. Learns from every correction you ship.
 
 ```
-slop poke --patch <file>   # scan: regex + AST, server-side
-slop apply                 # strip flagged lines, amend HEAD
+slop poke --patch <file>   # instant scan
+slop apply                 # auto-clean flagged lines, amend HEAD
 slop learn "this was a false positive on src/foo.rs"
 ```
 
@@ -24,18 +24,16 @@ slop learn "this was a false positive on src/foo.rs"
 
 | category | what it kills |
 |---|---|
-| `ai_scaffolding`  | `// Step 1:` / `// Initialize the X` / `// Helper function for …` |
-| `naming_slop`     | `process_data`, `class XManager`, `let data1 = …`, `getStuff()` |
-| `defensive_crud`  | `except: pass`, `} catch (Exception) {}`, redundant null guards |
-| `todo_implement`  | `TODO: implement`, `unimplemented!()`, `raise NotImplementedError` |
-| `emoji_in_code`   | any emoji in source — almost always LLM signature |
-| `what_filler`     | comments that just restate the next line of code |
-| `unused_generic`  | `fn foo<T>(x: i32)` — generic declared but never used (tree-sitter) |
+| AI scaffolding   | `// Step 1:` / `// Initialize the X` / `// Helper function for …` |
+| Naming slop      | `process_data`, `class XManager`, `let data1 = …`, `getStuff()` |
+| Defensive crud   | `except: pass`, `} catch (Exception) {}`, redundant null guards |
+| Half-finished    | `TODO: implement`, `unimplemented!()`, `raise NotImplementedError` |
+| Emoji-in-code    | any emoji in source — almost always LLM signature |
+| Restating code   | comments that just paraphrase the line below them |
+| Dead generics    | type parameters declared but never used |
 
-Detector lives on the server. The CLI is a thin sender + applier.
-Algorithms ship server-side so the catalog can evolve without
-re-publishing the binary — every customer gets the latest detectors
-on their next poke.
+The detection engine runs server-side, so the catalog is always the
+latest version — no re-install needed to benefit from improvements.
 
 ## Install
 
@@ -59,8 +57,8 @@ git clone https://github.com/peeramid-labs/slop-cli.git
 cd slop-cli
 cargo install --path crates/sloppoke-cli
 ```
-Needs rust `1.86+`. Build is one binary, no LLM runtime, no native
-deps beyond `ssh-keygen` for request signing.
+Needs rust `1.86+`. One binary, no runtime daemons, no native deps
+beyond `ssh-keygen` for request signing.
 
 ### Pre-built tarballs
 Grab the matching archive for your platform from [Releases](https://github.com/peeramid-labs/slop-cli/releases),
@@ -73,7 +71,7 @@ slop login                     # SSH-key handshake; cache identity
 slop poke --patch <file>       # first call: 402 + Stripe Checkout URL
                                # pay → next call lands findings + plan
 slop apply                     # auto-strip flagged lines, amend HEAD
-slop learn "false positive"    # ship feedback → RL loop learns
+slop learn "false positive"    # shapes future scans
 ```
 
 `slop apply` runs `git apply` + `git commit --amend` locally. Use
@@ -85,27 +83,29 @@ slop learn "false positive"    # ship feedback → RL loop learns
 |---|---|---|
 | Slop Poke | $20 / month | 100,000 pokes |
 
-Quota resets on the first of each month. Per-IP throttle 30
-requests/min by default — bump on the server if your IDE legitimately
-bursts harder.
+Quota resets on the first of each month.
 
-## How it learns
+## Learns as you go
 
-Every poke gets persisted server-side (the patch + verdict + findings).
-Every `slop learn "…"` lands in the same store. The operator drains
-the queue periodically and feeds it through an offline LLM workflow
-that proposes catalog tweaks; new regex/AST detectors flow back into
-the next server release. You feel the catalog get smarter over time
-without re-installing anything.
+slop adapts to **your** code and **your** preferences through machine
+learning. Every `slop learn "…"` you submit teaches the engine — for
+your account and your project specifically. False positives get
+quieter. Real misses get caught next time. The catalog you experience
+on day 30 is calibrated to your team's idioms in ways the day-1
+catalog could not be.
 
-Per-fingerprint learn cap: **100 submissions/month, 1 MiB per submit.**
+> slop does not retain user information. Learning signals are folded
+> into the model and the raw inputs do not persist.
+
+Per-account learn intake: **100 submissions/month, 1 MiB per
+submission.** Plenty for a small team; if you need more, ping
+[engineering@peeramid.xyz](mailto:engineering@peeramid.xyz).
 
 ## Auth model
 
-- SSH key fingerprint = identity. No accounts, no signups beyond the
-  Stripe checkout.
-- `slop login` reads `~/.ssh/id_ed25519.pub`, sends it to the server,
-  caches the canonical `SHA256:…` fingerprint locally.
+- SSH key = identity. No accounts, no signups beyond Stripe checkout.
+- `slop login` reads `~/.ssh/id_ed25519.pub`, derives a canonical
+  fingerprint, caches it locally.
 - Each request signs `{method}\n{path}\n{timestamp}\n{sha256(body)}`
   via `ssh-keygen -Y sign`. The server verifies the signature with
   the in-band pubkey.

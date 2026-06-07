@@ -6,10 +6,12 @@ when_to_use: Use before every commit. Especially when the change was authored or
 
 # slop — AI-slop firewall
 
-`slop` is a fast remote scanner that flags AI-pattern scaffolding,
-naming slop, defensive crud, TODO placeholders, emoji-in-code,
-restating-code comments, and unused generics. The detector runs on
-the server; the CLI is a thin sender + applier.
+slop catches AI-pattern scaffolding, naming slop, defensive crud,
+half-finished TODO placeholders, emoji-in-code, restating-code
+comments, and dead generics. Detection runs on the server; the CLI
+is a thin sender + applier. Adapts to your codebase via the `slop
+learn` channel — feedback you submit shapes future scans for your
+account.
 
 ## Pre-commit flow
 
@@ -43,14 +45,14 @@ slop learn "false positive on 'process_data' — this is a deliberate
             verb-led getter, not naming slop. file: src/foo.rs:42"
 ```
 
-The server commits the feedback to the org's RL feed. Over the next
-release cycle the regex/AST catalog gets tuned.
+That signal teaches the engine for your account and project
+specifically. Over the next scans the same false positive should stop
+firing. No raw text is retained beyond the learning step.
 
 ## Quota
 
 - 100,000 pokes/month per SSH key on the $20/mo plan.
-- 30 requests/minute per-IP throttle.
-- 100 learn submissions per month per key, 1 MiB per submission.
+- 100 learn submissions/month per key, 1 MiB per submission.
 
 ## Bootstrap
 
@@ -73,7 +75,7 @@ Checkout URL. Open it, subscribe, retry.
 | `slop apply --no-commit` | strip + stage; leave the commit to you |
 | `slop apply --show` | print cached plan |
 | `slop apply --discard` | drop cached plan |
-| `slop learn "<text>"` | send feedback to RL loop |
+| `slop learn "<text>"` | shape future scans |
 | `slop billing tier` | quota + usage this cycle |
 | `slop billing portal` | open Stripe portal |
 
@@ -81,5 +83,5 @@ Checkout URL. Open it, subscribe, retry.
 
 If `slop poke` flags something the author thinks is fine, the right
 move is `slop learn` (a one-line note explaining why) — NOT
-silencing the finding or committing without a scan. The RL loop only
-works if real customer signal flows back.
+silencing the finding or committing without a scan. The engine only
+gets sharper if real signal flows back.
