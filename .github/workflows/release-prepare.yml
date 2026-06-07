@@ -32,7 +32,14 @@ jobs:
       - name: Install tools
         uses: cargo-bins/cargo-binstall@v1.17.9
       - name: Install cargo-edit and git-cliff
-        run: cargo binstall --no-confirm cargo-edit git-cliff
+        run: |
+          set -euo pipefail
+          cargo binstall --no-confirm cargo-edit git-cliff
+          # Fail loud if binstall silently no-op'd — past runs
+          # produced empty release commits because cargo set-version
+          # was missing and the bump step didn't notice.
+          cargo set-version --version
+          git-cliff --version
 
       - name: Calculate version bump
         id: bump
@@ -156,6 +163,16 @@ jobs:
           # sole crate (sloppoke-cli) inherits via .workspace = true.
           cargo set-version --workspace "$VERSION"
           cargo generate-lockfile
+
+          # Verify the bump actually landed. Past failure: cargo-edit
+          # was silently missing on the runner, set-version reported
+          # success, and Cargo.toml stayed at the old version → empty
+          # release commit. Fail loud here so the operator sees it.
+          ACTUAL=$(awk '/^\[workspace.package\]/{f=1} f && /^version *=/{print; exit}' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::cargo set-version did not bump Cargo.toml (expected $VERSION, got $ACTUAL)"
+            exit 1
+          fi
 
           # Prepend new changelog section (preserves existing hand-curated content).
           # Skip silently if CHANGELOG.md doesn't exist yet — slop-cli is
