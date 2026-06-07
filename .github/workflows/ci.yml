@@ -99,7 +99,7 @@ jobs:
           key: "ci-test-v1"
 
       - name: Run Tests
-        run: cargo test --workspace --bins
+        run: cargo test --workspace
 
   shellcheck:
     name: Shell Script Lint
