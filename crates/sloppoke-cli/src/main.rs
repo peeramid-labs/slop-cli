@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
 use api::CleanupAction;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_SERVER: &str = "https://slop.peeramid.xyz";
@@ -209,8 +209,8 @@ fn derive_key_from_pubkey(p: &Path) -> PathBuf {
 // ── poke ─────────────────────────────────────────────────────────
 
 fn run_poke(args: PokeArgs) -> Result<()> {
-    let cfg = api::load_config()
-        .context("`slop poke` needs a server config. Run `slop login` first.")?;
+    let cfg =
+        api::load_config().context("`slop poke` needs a server config. Run `slop login` first.")?;
     let (patch, source) = resolve_patch(&args)?;
     if patch.trim().is_empty() {
         bail!("nothing to scan ({source})");
