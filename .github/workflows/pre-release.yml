@@ -124,7 +124,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload slop tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: binary-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload slop .deb artifact
         if: matrix.deb_arch != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: deb-${{ matrix.deb_arch }}
           path: ${{ env.DEB_FILE }}
@@ -179,19 +179,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
         with:
           path: artifacts
-          pattern: binary-*
-          merge-multiple: true
 
-      - name: Download .deb artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: debs
-          pattern: deb-*
-          merge-multiple: true
+      - name: Flatten artifacts
+        run: |
+          mkdir -p tars debs
+          find artifacts -name "*.tar.gz" -exec cp {} tars/ \;
+          find artifacts -name "*.deb"    -exec cp {} debs/ \;
+          ls -la tars/ debs/
 
       # On immutable-release repos, softprops/action-gh-release publishes
       # immediately (even with prerelease: true), making re-runs impossible.
@@ -215,7 +213,7 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             --notes "$NOTES" \
-            artifacts/*.tar.gz debs/*.deb
+            tars/*.tar.gz debs/*.deb
         env:
           TAG: ${{ needs.validate.outputs.tag }}
           REF_NAME: ${{ github.ref_name }}

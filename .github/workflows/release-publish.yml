@@ -232,12 +232,17 @@ jobs:
           bash packaging/deb/build-deb.sh "$VERSION" "$ARCH" "$BINARY"
           echo "DEB_FILE=slop_${VERSION}_${ARCH}.deb" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      # Pin to v3 — forgejo emulates GHES which doesn't support
+      # upload-artifact@v4 (`@actions/artifact v2.0.0+ … not currently
+      # supported on GHES`). v3 can't merge multiple artifacts at
+      # download time, so the consumer jobs below grab ALL artifacts
+      # and glob by directory name instead.
+      - uses: actions/upload-artifact@v3
         with:
           name: binary-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         if: matrix.deb_arch != ''
         with:
           name: deb-${{ matrix.deb_arch }}
@@ -246,7 +251,7 @@ jobs:
       - name: Write SHA256 file
         run: echo "${{ steps.sha.outputs.sha256 }}" > "${{ matrix.target }}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: sha256-file-${{ matrix.target }}
           path: ${{ matrix.target }}.sha256
@@ -258,17 +263,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      # v3 downloads each artifact into a subfolder named after it.
+      # Pulling everything in one shot is simpler than per-name fan-out.
+      - uses: actions/download-artifact@v3
         with:
           path: artifacts
-          pattern: binary-*
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: debs
-          pattern: deb-*
-          merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -276,8 +275,8 @@ jobs:
           name: ${{ needs.tag.outputs.tag }}
           body: ${{ needs.tag.outputs.changelog_body }}
           files: |
-            artifacts/*.tar.gz
-            debs/*.deb
+            artifacts/binary-*/*.tar.gz
+            artifacts/deb-*/*.deb
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -292,19 +291,18 @@ jobs:
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
-          path: shasums
-          pattern: sha256-file-*
-          merge-multiple: true
+          path: artifacts
 
       - name: Generate Homebrew formula
         run: |
           VERSION="${{ needs.tag.outputs.version }}"
-          SHA_MAC_ARM=$(cat shasums/aarch64-apple-darwin.sha256)
-          SHA_MAC_X86=$(cat shasums/x86_64-apple-darwin.sha256)
-          SHA_LIN_ARM=$(cat shasums/aarch64-unknown-linux-gnu.sha256)
-          SHA_LIN_X86=$(cat shasums/x86_64-unknown-linux-gnu.sha256)
+          # v3 puts each artifact in its own subdir named after it.
+          SHA_MAC_ARM=$(cat artifacts/sha256-file-aarch64-apple-darwin/aarch64-apple-darwin.sha256)
+          SHA_MAC_X86=$(cat artifacts/sha256-file-x86_64-apple-darwin/x86_64-apple-darwin.sha256)
+          SHA_LIN_ARM=$(cat artifacts/sha256-file-aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu.sha256)
+          SHA_LIN_X86=$(cat artifacts/sha256-file-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu.sha256)
           sed \
             -e "s/{{VERSION}}/${VERSION}/g" \
             -e "s/{{SHA256_MACOS_ARM64}}/${SHA_MAC_ARM}/g" \
@@ -334,11 +332,15 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.tag.outputs.has_apt_token == 'true'
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
-          path: debs
-          pattern: deb-*
-          merge-multiple: true
+          path: artifacts
+
+      - name: Flatten downloaded debs
+        run: |
+          mkdir -p debs
+          find artifacts -name "*.deb" -exec cp {} debs/ \;
+          ls -la debs/
 
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev
