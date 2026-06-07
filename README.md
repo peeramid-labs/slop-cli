@@ -2,8 +2,6 @@
 
 [![Release](https://img.shields.io/github/v/release/peeramid-labs/slop-cli?label=release)](https://github.com/peeramid-labs/slop-cli/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Homebrew](https://img.shields.io/badge/brew-peeramid--labs%2Ftap%2Fslop-orange.svg)](https://github.com/peeramid-labs/homebrew-tap)
-[![APT](https://img.shields.io/badge/apt-peeramid--labs%2Fapt--repo-blue.svg)](https://github.com/peeramid-labs/apt-repo)
 [![Server: slop.peeramid.xyz](https://img.shields.io/badge/server-slop.peeramid.xyz-green.svg)](https://slop.peeramid.xyz/)
 
 <p align="center">
@@ -41,32 +39,18 @@ re-install needed.
 
 ## Install
 
-### Homebrew (macOS / Linux)
-```
-brew install peeramid-labs/tap/slop
-```
+Build from source — brew tap + APT repo are paused while the release
+pipeline stabilises.
 
-### APT (Debian / Ubuntu)
-```
-curl -fsSL https://raw.githubusercontent.com/peeramid-labs/apt-repo/main/KEY.gpg \
-    | sudo gpg --dearmor -o /usr/share/keyrings/peeramid.gpg
-echo "deb [signed-by=/usr/share/keyrings/peeramid.gpg] https://raw.githubusercontent.com/peeramid-labs/apt-repo/main stable main" \
-    | sudo tee /etc/apt/sources.list.d/peeramid.list
-sudo apt update && sudo apt install slop
-```
-
-### From source
 ```
 git clone https://github.com/peeramid-labs/slop-cli.git
 cd slop-cli
 cargo install --path crates/sloppoke-cli
 ```
-Needs rust `1.86+`. One binary, no runtime daemons, no native deps
-beyond `ssh-keygen` for request signing.
 
-### Pre-built tarballs
-Grab the matching archive for your platform from [Releases](https://github.com/peeramid-labs/slop-cli/releases),
-unpack, drop `slop` into your `$PATH`.
+Needs rust `1.86+`. One binary, no runtime daemons, no native deps
+beyond `ssh-keygen` for request signing. `cargo install` places `slop`
+in `~/.cargo/bin/` — make sure that's on your `$PATH`.
 
 ## Get started
 
