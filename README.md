@@ -39,8 +39,16 @@ re-install needed.
 
 ## Install
 
-Build from source — brew tap + APT repo are paused while the release
-pipeline stabilises.
+### Homebrew (macOS + Linux)
+
+```
+brew install peeramid-labs/tap/slop
+```
+
+Prebuilt binaries for macOS (arm64 + x86_64) and Linux (arm64 + x86_64).
+APT repo still pending.
+
+### Build from source
 
 ```
 git clone https://github.com/peeramid-labs/slop-cli.git
