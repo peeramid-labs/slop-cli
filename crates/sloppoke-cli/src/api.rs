@@ -257,6 +257,12 @@ fn signed_request(
     // body — server decodes back to the PEM ssh-keygen verify expects.
     let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.as_bytes());
     let pubkey_line = read_pubkey_line(&cfg.ssh_key_path)?;
+    // Recompute the fingerprint from the pubkey we're actually
+    // sending — `cfg.fingerprint` may belong to a different keypair
+    // (e.g. user re-ran `slop login --key foo` with default --pubkey
+    // pointing at ed25519). Server rejects mismatched fingerprint/
+    // pubkey pairs with 401 "does not match".
+    let fingerprint = fingerprint_from_pubkey_line(&pubkey_line)?;
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -273,10 +279,25 @@ fn signed_request(
     req = req
         .header("Content-Type", "application/json")
         .header("X-Slop-Ts", ts)
-        .header("X-Slop-Fingerprint", &cfg.fingerprint)
+        .header("X-Slop-Fingerprint", fingerprint)
         .header("X-Slop-Pubkey", pubkey_line)
         .header("Authorization", format!("Slop-SSH-Sig {signature_b64}"));
     Ok(req.send()?)
+}
+
+fn fingerprint_from_pubkey_line(line: &str) -> Result<String> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let b64 = parts
+        .get(1)
+        .ok_or_else(|| anyhow!("pubkey line missing base64 body: {line:?}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .context("decode pubkey base64")?;
+    let hash = sha2::Sha256::digest(&bytes);
+    Ok(format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash)
+    ))
 }
 
 fn read_pubkey_line(private_key_path: &Path) -> Result<String> {
