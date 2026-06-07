@@ -1,6 +1,8 @@
 # slop
 
-![mascot](assets/mascot.png)
+<p align="center">
+  <img src="./assets/mascot.png" alt="slop mascot" width="500"/>
+</p>
 
 [![CI](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/peeramid-labs/slop-cli/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/peeramid-labs/slop-cli?label=release)](https://github.com/peeramid-labs/slop-cli/releases)
