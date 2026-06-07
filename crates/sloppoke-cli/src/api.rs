@@ -20,22 +20,15 @@ const CONFIG_DIR_ENV: &str = "SLOP_CONFIG_DIR";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SavedConfig {
     pub server_url: String,
-    pub forgejo_user: String,
-    #[allow(dead_code)]
     pub fingerprint: String,
     pub ssh_key_path: PathBuf,
     #[serde(default)]
-    pub orgs: Vec<String>,
+    pub slop_org: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DiscoverResponse {
-    #[serde(default)]
-    pub forgejo_user: String,
-    #[allow(dead_code)]
     pub fingerprint: String,
-    #[serde(default)]
-    pub orgs: Vec<String>,
     #[serde(default)]
     pub slop_org: String,
 }

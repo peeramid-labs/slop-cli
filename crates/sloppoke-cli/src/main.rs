@@ -6,7 +6,7 @@
 //!   slop learn  "<feedback>"    ship feedback to the RL loop
 //!   slop billing tier|portal    subscription + usage / Stripe portal
 
-mod forgejo_api;
+mod api;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use forgejo_api::CleanupAction;
+use api::CleanupAction;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_SERVER: &str = "https://slop.peeramid.xyz";
@@ -160,15 +160,14 @@ fn run_login(args: LoginArgs) -> Result<()> {
     let key_path = args
         .key
         .unwrap_or_else(|| derive_key_from_pubkey(&pubkey_path));
-    let resp = forgejo_api::discover(&args.server, &pubkey_line)?;
-    let cfg = forgejo_api::SavedConfig {
+    let resp = api::discover(&args.server, &pubkey_line)?;
+    let cfg = api::SavedConfig {
         server_url: args.server,
-        forgejo_user: resp.forgejo_user.clone(),
         fingerprint: resp.fingerprint.clone(),
         ssh_key_path: key_path,
-        orgs: resp.orgs.clone(),
+        slop_org: resp.slop_org.clone(),
     };
-    forgejo_api::save_config(&cfg)?;
+    api::save_config(&cfg)?;
     println!(
         "slop: logged in as {} ({})",
         if resp.slop_org.is_empty() {
@@ -201,7 +200,7 @@ fn derive_key_from_pubkey(p: &Path) -> PathBuf {
 // ── poke ─────────────────────────────────────────────────────────
 
 fn run_poke(args: PokeArgs) -> Result<()> {
-    let cfg = forgejo_api::load_config()
+    let cfg = api::load_config()
         .context("`slop poke` needs a server config. Run `slop login` first.")?;
     let (patch, source) = resolve_patch(&args)?;
     if patch.trim().is_empty() {
@@ -217,7 +216,7 @@ fn run_poke(args: PokeArgs) -> Result<()> {
         return Ok(());
     }
 
-    let resp = forgejo_api::poke(&cfg, args.project.as_deref(), &patch)?;
+    let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
     eprintln!(
         "slop poke: {} ({} ms, {}/{} this cycle)",
         resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
@@ -242,7 +241,7 @@ struct CachedPlan {
     cleanup_actions: Vec<CleanupAction>,
 }
 
-fn save_plan(r: &forgejo_api::PokeResponse) -> Result<()> {
+fn save_plan(r: &api::PokeResponse) -> Result<()> {
     let dir = Path::new(".slop");
     if let Err(e) = fs::create_dir_all(dir) {
         eprintln!("slop: warning — could not create .slop dir: {e}");
@@ -417,9 +416,9 @@ fn git_run(args: &[&str]) -> Result<()> {
 // ── learn ────────────────────────────────────────────────────────
 
 fn run_learn(args: LearnArgs) -> Result<()> {
-    let cfg = forgejo_api::load_config()
+    let cfg = api::load_config()
         .context("`slop learn` needs a server config. Run `slop login` first.")?;
-    let resp = forgejo_api::learn(
+    let resp = api::learn(
         &cfg,
         &args.feedback,
         args.context.as_deref(),
@@ -435,10 +434,10 @@ fn run_learn(args: LearnArgs) -> Result<()> {
 // ── billing ──────────────────────────────────────────────────────
 
 fn run_billing(cmd: BillingCmd) -> Result<()> {
-    let cfg = forgejo_api::load_config()?;
+    let cfg = api::load_config()?;
     match cmd {
         BillingCmd::Tier => {
-            let resp = forgejo_api::billing_tier(&cfg)?;
+            let resp = api::billing_tier(&cfg)?;
             println!(
                 "{}: poke {}/{} | review_tokens {}/{}",
                 resp.slop_org,
@@ -450,7 +449,7 @@ fn run_billing(cmd: BillingCmd) -> Result<()> {
             Ok(())
         }
         BillingCmd::Portal { print } => {
-            let resp = forgejo_api::billing_portal(&cfg)?;
+            let resp = api::billing_portal(&cfg)?;
             if print {
                 println!("{}", resp.url);
                 return Ok(());
