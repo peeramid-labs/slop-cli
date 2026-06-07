@@ -176,20 +176,31 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      - name: Install cross
+      # cargo-zigbuild replaces cross-rs for linux targets — works on
+      # the aarch64 forgejo runner without Docker, and avoids the
+      # cross-0.2.5 bug where it tries to `rustup toolchain add
+      # stable-x86_64-unknown-linux-gnu` (a host toolchain that can't
+      # run on aarch64). Mac targets build natively and skip zig.
+      - name: Install zig
+        if: matrix.use_cross
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.13.0"
+
+      - name: Install cargo-zigbuild
         if: matrix.use_cross
         uses: cargo-bins/cargo-binstall@v1.17.9
-      - name: Install cross via binstall
+      - name: Install cargo-zigbuild via binstall
         if: matrix.use_cross
         run: |
-          cargo binstall --no-confirm --force cross
+          cargo binstall --no-confirm --force cargo-zigbuild
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cross --version
+          cargo-zigbuild --version
 
       - name: Build
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p sloppoke-cli
+            cargo zigbuild --release --target ${{ matrix.target }} -p sloppoke-cli
           else
             cargo build --release --target ${{ matrix.target }} -p sloppoke-cli
           fi
