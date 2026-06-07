@@ -107,11 +107,19 @@ jobs:
         if: steps.bump.outputs.skip != 'true'
         id: existing
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO_API: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
           BRANCH="release/slop/v${VERSION}"
-          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' || echo "")
+          # Forgejo's pulls API: filter by head branch. Returns [] if
+          # none, [{...}] if open.
+          EXISTING=$(curl -fsSL \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_API}/repos/${REPO}/pulls?state=open&head=${BRANCH}" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["number"] if d else "")' \
+            2>/dev/null || echo "")
           if [ -n "$EXISTING" ]; then
             echo "Release PR #${EXISTING} already exists for ${BRANCH}"
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -122,7 +130,9 @@ jobs:
       - name: Create release branch and PR
         if: steps.bump.outputs.skip != 'true' && steps.existing.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO_API: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
           BRANCH="release/slop/v${VERSION}"
@@ -191,19 +201,47 @@ jobs:
             echo "> Merging this PR will trigger the publish workflow: tag creation, binary builds, and GitHub Release."
           } > /tmp/pr-body.md
 
-          # Ensure the "release" label exists (create if missing, ignore "already exists" error)
-          if ! gh label create "release" --description "Automated release PR" --color "0e8a16" 2>&1; then
-            # Check if it failed for a reason other than "already exists"
-            if ! gh label list --search "release" --json name -q '.[].name' | grep -qx "release"; then
-              echo "::error::Failed to create or find 'release' label"
-              exit 1
-            fi
+          # ── Forgejo REST: ensure the "release" label, get its id ──
+          LABEL_ID=$(curl -fsSL \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_API}/repos/${REPO}/labels" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((l["id"] for l in d if l["name"]=="release"), ""))' \
+            2>/dev/null || echo "")
+          if [ -z "$LABEL_ID" ]; then
+            LABEL_ID=$(curl -fsSL -X POST \
+              -H "Authorization: token ${FORGEJO_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"release","color":"#0e8a16","description":"Automated release PR"}' \
+              "${FORGEJO_API}/repos/${REPO}/labels" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' \
+              2>/dev/null || echo "")
+          fi
+          if [ -z "$LABEL_ID" ]; then
+            echo "::warning::could not create or find 'release' label — opening PR without it"
           fi
 
-          # Create PR
-          gh pr create \
-            --base dev \
-            --head "$BRANCH" \
-            --title "chore(release): v${VERSION}" \
-            --body-file /tmp/pr-body.md \
-            --label "release"
+          # ── Forgejo REST: open the PR ─────────────────────────────
+          PR_BODY=$(python3 -c 'import json,sys; print(json.dumps(open(sys.argv[1]).read()))' /tmp/pr-body.md)
+          PR_PAYLOAD=$(printf '{"title":"chore(release): v%s","head":"%s","base":"dev","body":%s}' \
+            "${VERSION}" "${BRANCH}" "${PR_BODY}")
+          PR_NUMBER=$(curl -fsSL -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "${PR_PAYLOAD}" \
+            "${FORGEJO_API}/repos/${REPO}/pulls" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("number",""))')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR create failed"
+            exit 1
+          fi
+          echo "Opened PR #${PR_NUMBER}"
+
+          # ── Forgejo REST: attach the label ────────────────────────
+          if [ -n "$LABEL_ID" ]; then
+            curl -fsSL -X POST \
+              -H "Authorization: token ${FORGEJO_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"labels\":[${LABEL_ID}]}" \
+              "${FORGEJO_API}/repos/${REPO}/issues/${PR_NUMBER}/labels" >/dev/null \
+              || echo "::warning::label attach failed (non-fatal)"
+          fi
