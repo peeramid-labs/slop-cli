@@ -39,10 +39,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Read current version from the crate's Cargo.toml
+          # Read current version from workspace root Cargo.toml.
+          # crates/sloppoke-cli inherits via `version.workspace = true`,
+          # so the canonical value lives in [workspace.package].
           CRATE_DIR="crates/sloppoke-cli"
-          CURRENT=$(grep -m1 '^version' "$CRATE_DIR/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
-          echo "Current $CRATE_DIR version: $CURRENT"
+          CURRENT=$(awk '/^\[workspace.package\]/{f=1} f && /^version *=/{print; exit}' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$CURRENT" ]; then
+            echo "::error::could not parse workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "Current version: $CURRENT"
 
           # Find previous tag to determine commit range
           PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -125,30 +131,38 @@ jobs:
           git checkout -b "$BRANCH"
 
           # Bump version
-          cargo set-version -p sloppoke-cli "$VERSION"
+          # --workspace bumps [workspace.package].version which the
+          # sole crate (sloppoke-cli) inherits via .workspace = true.
+          cargo set-version --workspace "$VERSION"
           cargo generate-lockfile
 
-          # Prepend new changelog section (preserves existing hand-curated content)
-          NEW_SECTION=$(git-cliff --tag "v${VERSION}" --unreleased --strip header 2>/dev/null || true)
-          if [ -n "$NEW_SECTION" ]; then
-            # Insert after the header ("# Changelog\n\nAll notable changes...")
-            # Find the first "## " line and prepend before it
-            HEADER_END=$(grep -n "^## " CHANGELOG.md | head -1 | cut -d: -f1)
-            if [ -n "$HEADER_END" ]; then
-              {
-                head -n $((HEADER_END - 1)) CHANGELOG.md
-                echo ""
-                echo "$NEW_SECTION"
-                echo ""
-                tail -n +"$HEADER_END" CHANGELOG.md
-              } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          # Prepend new changelog section (preserves existing hand-curated content).
+          # Skip silently if CHANGELOG.md doesn't exist yet — slop-cli is
+          # still pre-release and we don't gate the workflow on it.
+          if [ -f CHANGELOG.md ]; then
+            NEW_SECTION=$(git-cliff --tag "v${VERSION}" --unreleased --strip header 2>/dev/null || true)
+            if [ -n "$NEW_SECTION" ]; then
+              HEADER_END=$(grep -n "^## " CHANGELOG.md | head -1 | cut -d: -f1)
+              if [ -n "$HEADER_END" ]; then
+                {
+                  head -n $((HEADER_END - 1)) CHANGELOG.md
+                  echo ""
+                  echo "$NEW_SECTION"
+                  echo ""
+                  tail -n +"$HEADER_END" CHANGELOG.md
+                } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+              fi
             fi
           fi
 
           # Commit changes (if any — version may already match Cargo.toml)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -u Cargo.toml Cargo.lock crates/*/Cargo.toml CHANGELOG.md
+          # Stage workspace root + crate manifests + lockfile.
+          # `git add -u` only updates already-tracked files, which is
+          # what we want — CHANGELOG.md is optional here.
+          git add -u Cargo.toml Cargo.lock crates/*/Cargo.toml 2>/dev/null || true
+          [ -f CHANGELOG.md ] && git add -u CHANGELOG.md || true
           if git diff --cached --quiet; then
             echo "No version changes needed — creating empty release commit"
             git commit --allow-empty -m "chore(release): v${VERSION}"

@@ -106,31 +106,31 @@ jobs:
 
       - name: Sync released version back to dev
         run: |
-          VERSION="${{ steps.extract.outputs.version }}"
           TAG="${{ steps.extract.outputs.tag }}"
           git checkout dev
           git pull origin dev
-          CHANGED=false
-          TOML="crates/sloppoke-cli/Cargo.toml"
-          if [ -f "$TOML" ]; then
-            RELEASE_VER=$(git show "$TAG:$TOML" 2>/dev/null | grep -m1 '^version' | sed 's/.*"\(.*\)".*/\1/' || true)
-            DEV_VER=$(grep -m1 '^version' "$TOML" | sed 's/.*"\(.*\)".*/\1/')
-            if [ -n "$RELEASE_VER" ] && [ "$RELEASE_VER" != "$DEV_VER" ]; then
-              sed -i "s/^version = \".*\"/version = \"$RELEASE_VER\"/" "$TOML"
-              CHANGED=true
-            fi
-          fi
-          ROOT_RELEASE_VER=$(git show "$TAG:Cargo.toml" 2>/dev/null | grep -m1 '^version' | sed 's/.*"\(.*\)".*/\1/' || true)
-          ROOT_DEV_VER=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          # Canonical version lives in [workspace.package] at the
+          # workspace root Cargo.toml. crates/sloppoke-cli inherits
+          # via `version.workspace = true`, so we only sync the root.
+          ROOT_RELEASE_VER=$(git show "$TAG:Cargo.toml" 2>/dev/null \
+            | awk '/^\[workspace.package\]/{f=1} f && /^version *=/{print; exit}' \
+            | sed 's/.*"\(.*\)".*/\1/' || true)
+          ROOT_DEV_VER=$(awk '/^\[workspace.package\]/{f=1} f && /^version *=/{print; exit}' Cargo.toml \
+            | sed 's/.*"\(.*\)".*/\1/')
           if [ -n "$ROOT_RELEASE_VER" ] && [ "$ROOT_RELEASE_VER" != "$ROOT_DEV_VER" ]; then
-            sed -i "s/^version = \".*\"/version = \"$ROOT_RELEASE_VER\"/" Cargo.toml
-            CHANGED=true
-          fi
-          if [ "$CHANGED" = "true" ]; then
+            # In-place replace the version line inside [workspace.package]
+            # only. Safer than a blanket s/^version/.../ which would also
+            # rewrite [package] versions if any sub-crate pinned its own.
+            awk -v new="$ROOT_RELEASE_VER" '
+              /^\[workspace.package\]/{in_ws=1}
+              /^\[/ && !/^\[workspace.package\]/{in_ws=0}
+              in_ws && /^version *=/{ sub(/"[^"]+"/, "\"" new "\"") }
+              {print}
+            ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
             cargo generate-lockfile
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -u Cargo.toml Cargo.lock crates/sloppoke-cli/Cargo.toml
+            git add -u Cargo.toml Cargo.lock
             if ! git diff --cached --quiet; then
               git commit -m "chore(release): sync version from $TAG to dev"
               git push origin dev
