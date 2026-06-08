@@ -8,10 +8,14 @@ when_to_use: Use before every commit. Especially when the change was authored or
 
 slop catches AI-pattern scaffolding, naming slop, defensive crud,
 half-finished TODO placeholders, emoji-in-code, restating-code
-comments, and dead generics. Detection runs on the server; the CLI
-is a thin sender + applier. Adapts to your codebase via the `slop
-learn` channel — feedback you submit shapes future scans for your
-account.
+comments, dead generics, redundant boolean comparisons, empty error
+throws, useless promise wrapping, off-by-one loop bounds, no-arg
+console.log calls, catch-and-rethrow, redundant null checks, AND new
+control-flow branches that ship without a paired test (Rust, TS/JS,
+Python, Go). Detection runs on the server. The CLI sends the patch,
+caches the server-rendered fix-patch, and applies it via `git apply`.
+Adapts to your codebase via the `slop learn` channel — feedback you
+submit shapes future scans for your account.
 
 ## Pre-commit flow
 
@@ -35,11 +39,31 @@ If verdict is `SLOP — N hits`:
 
 ```bash
 # inspect what was flagged (printed by `slop poke`)
-# then mechanically strip:
+# then mechanically apply the server's fix-patch:
 slop apply
-# `slop apply` deletes flagged lines from working tree,
-# stages them, and amends HEAD (or use --no-commit to inspect).
 ```
+
+`slop apply` runs `git apply --unidiff-zero --check` first; if the
+patch wouldn't apply cleanly, the working tree is left untouched and
+the CLI prints `git apply`'s reason. On success it stages the change
+and amends HEAD. Pass `--no-commit` to inspect the staged diff before
+committing.
+
+## What apply does to each hit
+
+Server tiers every finding by safety, the CLI never invents fixes:
+
+- **Safe-delete** (comment-line slop, empty console.log) → the line is
+  removed.
+- **Todo** (anything semantically loaded — naming, branches without
+  tests, off-by-one bounds, redundant null checks) → a
+  `// TODO(slop): …` comment is spliced above the line in the file's
+  native comment syntax. Code is left intact. You decide.
+- **Flag-only** (TODO/FIXME placeholders) → surfaced in the verdict
+  but no patch change. Nothing to mechanically fix.
+
+If apply's preflight refuses the patch, the working tree is byte-
+identical to its pre-apply state. Re-running is safe.
 
 ## When the model disagrees with a finding
 
@@ -59,11 +83,12 @@ firing. No raw text is retained beyond the learning step.
 
 ## Bootstrap
 
-If you haven't logged in yet:
-
 ```bash
 slop login
-# reads ~/.ssh/id_ed25519.pub, caches identity in ~/.config/slop/
+# Asks `ssh -G <server-host>` which key OpenSSH would pick for the
+# server (same resolution `git` already observes). Honours per-host
+# `IdentityFile` blocks in ~/.ssh/config. Caches the identity in
+# ~/.config/slop/.
 ```
 
 If the first `slop poke` returns 402, the response includes a Stripe
@@ -73,11 +98,14 @@ Checkout URL. Open it, subscribe, retry.
 
 | command | does |
 |---|---|
-| `slop poke --patch FILE` | scan; cache plan to `.slop/last-poke.json` |
-| `slop apply` | strip flagged lines, `git add`, `git commit --amend` |
-| `slop apply --no-commit` | strip + stage; leave the commit to you |
-| `slop apply --show` | print cached plan |
-| `slop apply --discard` | drop cached plan |
+| `slop poke` | scan working tree vs HEAD; cache plan to `.slop/last-poke.json` |
+| `slop poke --staged` | scan the staged index |
+| `slop poke --range X..Y` | scan an explicit git diff range |
+| `slop poke --patch FILE` | scan a unified-diff file directly |
+| `slop apply` | preflight + `git apply` + `git commit --amend` |
+| `slop apply --no-commit` | preflight + `git apply --index`; you commit |
+| `slop apply --show` | print cached plan (patch + actions) |
+| `slop apply --discard` | drop cached plan, no patch action |
 | `slop learn "<text>"` | shape future scans |
 | `slop billing tier` | quota + usage this cycle |
 | `slop billing portal` | open Stripe portal |
