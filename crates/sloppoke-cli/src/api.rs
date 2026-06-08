@@ -102,6 +102,11 @@ pub struct UsageRow {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PokeResponse {
+    /// Server stopped sending per-finding data on the wire to avoid
+    /// leaking the catalog. The patch + verdict count carry every
+    /// signal the CLI needs. Default keeps older CLIs talking to
+    /// newer servers without an error.
+    #[serde(default)]
     pub findings: Vec<PokeFinding>,
     /// Unified-diff patch the CLI prefers via `git apply`. Empty when
     /// the server has nothing actionable (LGTM or flag-only hits) or
