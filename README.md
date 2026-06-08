@@ -113,6 +113,57 @@ the server host (same resolution git observes), caches the fingerprint
 locally, and signs each request with `ssh-keygen -Y sign`. No accounts,
 no signups beyond Stripe checkout.
 
+## Use in CI
+
+Drop into any GitHub Actions job to gate merges on a clean scan:
+
+```yaml
+jobs:
+  slop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                  # need history for range diff
+      - name: install slop
+        run: |
+          curl -fsSL https://github.com/peeramid-labs/sloppoke/releases/latest/download/sloppoke-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+      - name: configure identity
+        env:
+          SLOP_SSH_KEY: ${{ secrets.SLOP_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SLOP_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          slop login
+      - name: scan PR
+        run: |
+          slop poke --range origin/${{ github.base_ref }}..HEAD > slop.patch
+          if [ -s slop.patch ]; then
+            echo "::error::sloppoke flagged AI-slop in this PR"
+            cat slop.patch
+            exit 1
+          fi
+```
+
+Mechanics:
+
+- **SSH key as secret.** `SLOP_SSH_KEY` holds the private key whose
+  fingerprint owns your subscription. Generate a dedicated CI key, run
+  `slop login` once locally to register the fingerprint, then store
+  the private half in GitHub Secrets. Same auth model as your laptop —
+  no separate token to manage.
+- **Scope to the PR diff.** `--range origin/${base_ref}..HEAD` keeps
+  the scan to changed lines only, so the run burns one poke per PR
+  instead of one per file.
+- **Exit code is the gate.** Empty stdout = clean = pass. Patch on
+  stdout = slop = fail the job, optionally print the patch in logs so
+  reviewers see the suggested fix.
+
+For monorepos or trunk-based flows where `origin/main..HEAD` is too
+broad, swap in `HEAD~1..HEAD` (last commit only) or a specific tag.
+
 ## Claude skill
 
 `/slop` is bundled as a Claude skill in `skills/slop.md` — wires the
