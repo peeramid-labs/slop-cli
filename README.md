@@ -12,13 +12,24 @@
 verdict per patch. Learns from every correction you ship.
 
 ```
-slop poke                  # scan working tree vs HEAD (default)
-slop poke --staged         # scan the staged index
-slop poke --range main..HEAD
-slop poke --since main     # everything that diverged from main
-slop poke --patch foo.patch
-slop apply                 # auto-clean flagged lines, amend HEAD
-slop learn "this was a false positive on src/foo.rs"
+slop poke                                # working tree vs HEAD (default)
+slop poke --staged                       # the staged index
+slop poke --range main..HEAD             # everything diverged from main
+slop poke --since main                   # shorthand for the same
+slop poke --patch foo.patch              # raw unified-diff file
+slop poke --gh org/repo --range X..Y     # any public github repo, no clone needed
+slop poke --repo URL  --range X..Y       # any git URL (gitlab, bitbucket, self-hosted)
+slop apply                               # apply the cached patch, amend HEAD
+slop learn "false positive on src/foo.rs"
+```
+
+Output goes to **stdout** as a unified-diff patch — apply hint and
+verdict line on stderr — so piping is trivial:
+
+```
+slop poke > slop.patch                   # save the patch
+slop poke | git apply --unidiff-zero     # apply directly
+slop poke | delta                        # view in a pager
 ```
 
 ## What it does

@@ -38,25 +38,30 @@ and `git fetch`es on subsequent runs, so back-to-back scans of the
 same URL are fast. Clone depth is inferred from `--range HEAD~N..HEAD`
 (no over-fetching). `SLOP_REMOTE_CLONE_DEPTH=<N>` overrides.
 
-If verdict is `LGTM`, commit normally.
+`slop poke` prints **only** the unified-diff patch on stdout — no
+verdict line, no per-finding summary, no banner, no footer. Stderr
+stays silent except for errors. The exit code + stdout sentinel
+carry every signal:
 
-If verdict is `SLOP — N hits`, `slop poke` prints:
-  1. The verdict + line count
-  2. One `[category] file:line — match` line per finding
-  3. The full proposed unified-diff patch on stdout (color-aware
-     when stdout is a TTY)
-  4. A `Run \`slop apply\`` footer
+- empty stdout, exit 0 → `LGTM`, no slop found
+- patch on stdout, exit 0 → `SLOP`, apply the patch to clean it
+- anything on stderr, exit 1 → real error (network, 402, auth, etc.)
+
+This makes piping uniform — no `2>/dev/null` needed:
+
+```bash
+slop poke > foo.patch                  # save the patch
+slop poke | git apply --unidiff-zero   # apply directly
+slop poke | delta                      # view in a pager
+slop poke; echo $?                     # 0 either way; check stdout for content
+```
 
 Common follow-ups:
 
 ```bash
-slop apply                                     # apply + amend HEAD
-slop apply --no-commit                         # apply + stage, you commit
-slop apply --discard                           # drop the cached plan
-
-# Capture clean patch for review / external tools:
-slop poke --gh user/repo --range main..HEAD --patch-only > slop.patch
-git apply --unidiff-zero < slop.patch          # apply manually
+slop apply                # apply the cached plan + amend HEAD
+slop apply --no-commit    # apply + stage; you commit
+slop apply --discard      # drop the cached plan
 ```
 
 `slop apply` runs `git apply --unidiff-zero --check` first; if the
@@ -116,7 +121,6 @@ URL. Open it, subscribe, retry.
 | `slop poke --patch FILE` | scan a unified-diff file directly |
 | `slop poke --gh org/repo` | scan a public github repo (any range, persistent cache) |
 | `slop poke --repo URL` | scan any git URL (gitlab, bitbucket, self-hosted) |
-| `slop poke --patch-only` | emit ONLY the unified diff on stdout — pairs with `> slop.patch` |
 | `slop apply` | preflight + `git apply --unidiff-zero` + `git commit --amend` |
 | `slop apply --no-commit` | preflight + `git apply --index`; you commit |
 | `slop apply --show` | print cached plan (patch + actions) |
