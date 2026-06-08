@@ -27,16 +27,36 @@ slop poke                    # working tree vs HEAD (default)
 slop poke --range main..HEAD # everything diverged from main
 slop poke --since main       # equivalent shorthand
 slop poke --patch foo.patch  # raw unified-diff file
+
+# Scan any public repo without cloning manually:
+slop poke --gh openclaw/openclaw --range HEAD~5..HEAD
+slop poke --repo https://gitlab.com/x/y.git --range main..feature
 ```
+
+The CLI shallow-clones into a persistent cache (`~/.cache/slop/repos/`)
+and `git fetch`es on subsequent runs, so back-to-back scans of the
+same URL are fast. Clone depth is inferred from `--range HEAD~N..HEAD`
+(no over-fetching). `SLOP_REMOTE_CLONE_DEPTH=<N>` overrides.
 
 If verdict is `LGTM`, commit normally.
 
-If verdict is `SLOP — N hits`:
+If verdict is `SLOP — N hits`, `slop poke` prints:
+  1. The verdict + line count
+  2. One `[category] file:line — match` line per finding
+  3. The full proposed unified-diff patch on stdout (color-aware
+     when stdout is a TTY)
+  4. A `Run \`slop apply\`` footer
+
+Common follow-ups:
 
 ```bash
-# inspect what was flagged (printed by `slop poke`)
-# then mechanically apply the server's fix-patch:
-slop apply
+slop apply                                     # apply + amend HEAD
+slop apply --no-commit                         # apply + stage, you commit
+slop apply --discard                           # drop the cached plan
+
+# Capture clean patch for review / external tools:
+slop poke --gh user/repo --range main..HEAD --patch-only > slop.patch
+git apply --unidiff-zero < slop.patch          # apply manually
 ```
 
 `slop apply` runs `git apply --unidiff-zero --check` first; if the
@@ -92,14 +112,22 @@ URL. Open it, subscribe, retry.
 | `slop poke` | scan working tree vs HEAD; cache plan to `.slop/last-poke.json` |
 | `slop poke --staged` | scan the staged index |
 | `slop poke --range X..Y` | scan an explicit git diff range |
+| `slop poke --since REF` | scan everything since REF |
 | `slop poke --patch FILE` | scan a unified-diff file directly |
-| `slop apply` | preflight + `git apply` + `git commit --amend` |
+| `slop poke --gh org/repo` | scan a public github repo (any range, persistent cache) |
+| `slop poke --repo URL` | scan any git URL (gitlab, bitbucket, self-hosted) |
+| `slop poke --patch-only` | emit ONLY the unified diff on stdout — pairs with `> slop.patch` |
+| `slop apply` | preflight + `git apply --unidiff-zero` + `git commit --amend` |
 | `slop apply --no-commit` | preflight + `git apply --index`; you commit |
 | `slop apply --show` | print cached plan (patch + actions) |
 | `slop apply --discard` | drop cached plan, no patch action |
 | `slop learn "<text>"` | shape future scans |
 | `slop billing tier` | quota + usage this cycle |
 | `slop billing portal` | open Stripe portal |
+
+Knobs: `SLOPPOKE_SERVER`, `SLOP_NO_VERSION_CHECK=1`,
+`SLOP_REMOTE_CLONE_DEPTH=<N>`, `SLOP_CACHE_DIR=<path>`,
+`SLOP_NO_COLOR=1` / `NO_COLOR=1`.
 
 ## Don't bypass it
 
