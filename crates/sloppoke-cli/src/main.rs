@@ -93,6 +93,12 @@ struct PokeArgs {
     /// Example: `slop poke --gh openclaw/openclaw --range HEAD~5..HEAD`
     #[arg(long, conflicts_with_all = ["patch", "repo"])]
     gh: Option<String>,
+    /// Print only the unified-diff patch on stdout — no verdict line,
+    /// no per-finding summary, no apply hint. Combine with shell
+    /// redirection to capture a clean patch file:
+    /// `slop poke --gh user/repo --range main..HEAD --patch-only > slop.patch`
+    #[arg(long, conflicts_with = "dry_run")]
+    patch_only: bool,
     /// Print the request JSON and exit without contacting the server.
     #[arg(long)]
     dry_run: bool,
@@ -252,20 +258,160 @@ fn remote_repo_url(args: &PokeArgs) -> Option<String> {
     None
 }
 
-/// Shallow-clone the URL into a unique temp dir and hand back a
-/// TempDir guard. Drop wipes the checkout on exit. Depth 50 covers
-/// every realistic `--range HEAD~N..HEAD` we'd want to scan; bump
-/// the env override if you need more history.
-fn remote_clone(url: String) -> Result<tempfile::TempDir> {
-    let depth = std::env::var("SLOP_REMOTE_CLONE_DEPTH")
+/// Infer the smallest clone depth that satisfies the caller's range
+/// selector. For ranges that explicitly reference `HEAD~N`, we need
+/// at most N+2 commits (the N ancestors, HEAD itself, plus a buffer
+/// for merge parents). For branch / tag / SHA refs we have no static
+/// bound so we fall back to a conservative default.
+///
+/// `SLOP_REMOTE_CLONE_DEPTH` always wins when set — escape hatch for
+/// users who know their range needs more history.
+fn infer_clone_depth(args: &PokeArgs) -> u32 {
+    const DEFAULT_DEPTH: u32 = 50;
+    if let Some(env) = std::env::var("SLOP_REMOTE_CLONE_DEPTH")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(50);
+    {
+        return env;
+    }
+    // Scan every `HEAD~<digits>` occurrence across both selectors,
+    // take the max N. +2 buffer (HEAD itself + a merge-parent step)
+    // means `HEAD~5..HEAD` clones depth 7, not 50.
+    let mut needed: Option<u32> = None;
+    for selector in [args.range.as_deref(), args.since.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        for capture in selector.split("HEAD~").skip(1) {
+            let digits: String = capture.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                needed = Some(needed.map_or(n, |cur| cur.max(n)));
+            }
+        }
+    }
+    needed.map(|n| n + 2).unwrap_or(DEFAULT_DEPTH)
+}
+
+/// Persistent cache root for cloned repos. `~/.cache/slop/repos/`
+/// by default; XDG override honored. One subdir per URL hash so the
+/// `git fetch` on subsequent runs reuses the same checkout instead
+/// of paying the full clone cost every invocation.
+fn cache_root() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("SLOP_CACHE_DIR") {
+        return Some(PathBuf::from(custom));
+    }
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(xdg).join("slop").join("repos"));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".cache")
+            .join("slop")
+            .join("repos"),
+    )
+}
+
+/// Hash a URL down to a stable, filesystem-safe directory name so the
+/// cache layout is predictable.
+fn url_to_cache_key(url: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(url.as_bytes());
+    let bytes = hasher.finalize();
+    let hex: String = bytes.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    hex
+}
+
+/// Reusable repo workdir. On cache hit, runs `git fetch --depth N`
+/// so the checkout includes whatever range the caller needs. On
+/// cache miss, does a full shallow clone. Either way the caller
+/// gets a stable PathBuf the rest of poke can chdir into.
+///
+/// `None` returned by this function means: caller should fall back
+/// to the tempdir path (e.g. cache root unwritable).
+fn cached_clone_or_fetch(url: &str, depth: u32) -> Option<PathBuf> {
+    let root = cache_root()?;
+    let dir = root.join(url_to_cache_key(url));
+    let _ = fs::create_dir_all(&root);
+    let depth_s = depth.to_string();
+    if dir.join(".git").exists() {
+        eprintln!("slop: refreshing cached {url} (depth {depth})…");
+        let ok = Command::new("git")
+            .args([
+                "-C",
+                dir.to_str()?,
+                "fetch",
+                "--depth",
+                &depth_s,
+                "--quiet",
+                "--no-tags",
+                "origin",
+            ])
+            .status()
+            .ok()?
+            .success();
+        if ok {
+            // Reset to the freshly-fetched HEAD so subsequent
+            // `git diff` calls see the new tip, not the stale one.
+            let _ = Command::new("git")
+                .args(["-C", dir.to_str()?, "reset", "--hard", "FETCH_HEAD"])
+                .status();
+            return Some(dir);
+        }
+        // Fetch failed — fall through to re-clone fresh.
+        let _ = fs::remove_dir_all(&dir);
+    }
+    eprintln!("slop: cloning {url} (depth {depth})…");
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            &depth_s,
+            "--quiet",
+            "--no-tags",
+            url,
+            dir.to_str()?,
+        ])
+        .status()
+        .ok()?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&dir);
+        return None;
+    }
+    Some(dir)
+}
+
+/// Holder so the rest of `run_poke` doesn't need to know whether the
+/// workdir is a tempdir (cache disabled) or a long-lived cached
+/// checkout. Drop wipes only the tempdir variant.
+enum RemoteWorkdir {
+    Cached(PathBuf),
+    #[allow(dead_code)] // Held by RAII; the tempdir's lifetime is what matters.
+    Tempdir(tempfile::TempDir),
+}
+
+impl RemoteWorkdir {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Cached(p) => p.as_path(),
+            Self::Tempdir(t) => t.path(),
+        }
+    }
+}
+
+/// Shallow-clone the URL — try the persistent cache first, fall back
+/// to a one-shot tempdir if the cache directory is unwritable.
+fn remote_clone(url: String, depth: u32) -> Result<RemoteWorkdir> {
+    if let Some(cached) = cached_clone_or_fetch(&url, depth) {
+        return Ok(RemoteWorkdir::Cached(cached));
+    }
+    // Cache path failed — fall back to a disposable tempdir.
     let tmp = tempfile::Builder::new()
         .prefix("slop-scan-")
         .tempdir()
         .context("create temp dir for --repo clone")?;
-    eprintln!("slop: cloning {url} (depth {depth})…");
+    eprintln!("slop: cloning {url} (depth {depth}, no cache)…");
     let depth_s = depth.to_string();
     let status = Command::new("git")
         .args([
@@ -282,7 +428,41 @@ fn remote_clone(url: String) -> Result<tempfile::TempDir> {
     if !status.success() {
         bail!("git clone {url} failed (exit {:?})", status.code());
     }
-    Ok(tmp)
+    Ok(RemoteWorkdir::Tempdir(tmp))
+}
+
+/// Print a unified diff to stdout, colorized when stdout is a TTY
+/// (red `-`, green `+`, cyan hunk header). Auto-disabled for pipes
+/// and redirections so `slop poke … | git apply --check` works.
+/// `NO_COLOR=1` (https://no-color.org) and `SLOP_NO_COLOR=1` both
+/// force plain output.
+fn emit_patch_maybe_colored(patch: &str) {
+    use std::io::IsTerminal;
+    let color = std::io::stdout().is_terminal()
+        && std::env::var("NO_COLOR").is_err()
+        && std::env::var("SLOP_NO_COLOR").is_err();
+    if !color {
+        println!("{}", patch.trim_end());
+        return;
+    }
+    const RED: &str = "\x1b[31m";
+    const GREEN: &str = "\x1b[32m";
+    const CYAN: &str = "\x1b[36m";
+    const DIM: &str = "\x1b[2m";
+    const RESET: &str = "\x1b[0m";
+    for line in patch.trim_end().lines() {
+        if line.starts_with("diff --git ") || line.starts_with("--- ") || line.starts_with("+++ ") {
+            println!("{DIM}{line}{RESET}");
+        } else if line.starts_with("@@") {
+            println!("{CYAN}{line}{RESET}");
+        } else if line.starts_with('+') {
+            println!("{GREEN}{line}{RESET}");
+        } else if line.starts_with('-') {
+            println!("{RED}{line}{RESET}");
+        } else {
+            println!("{line}");
+        }
+    }
 }
 
 fn run_poke(args: PokeArgs) -> Result<()> {
@@ -291,7 +471,11 @@ fn run_poke(args: PokeArgs) -> Result<()> {
     // --repo / --gh: shallow-clone an arbitrary git URL into a temp
     // dir, run the rest of the resolver from inside it. tempdir Drop
     // cleans the checkout regardless of success/panic.
-    let remote_workdir = remote_repo_url(&args).map(remote_clone).transpose()?;
+    let remote_workdir = if let Some(url) = remote_repo_url(&args) {
+        Some(remote_clone(url, infer_clone_depth(&args))?)
+    } else {
+        None
+    };
     let (patch, source) = if let Some(ref tmp) = remote_workdir {
         std::env::set_current_dir(tmp.path())
             .with_context(|| format!("chdir into cloned repo {}", tmp.path().display()))?;
@@ -314,6 +498,16 @@ fn run_poke(args: PokeArgs) -> Result<()> {
     }
 
     let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
+    // --patch-only: skip every human-facing line, emit only the diff.
+    // Pairs naturally with shell redirection: `slop poke … > slop.patch`
+    // gives a file containing nothing but the unified diff.
+    if args.patch_only {
+        save_plan(&resp)?;
+        if !resp.patch.trim().is_empty() {
+            println!("{}", resp.patch.trim_end());
+        }
+        return Ok(());
+    }
     eprintln!(
         "slop poke: {} ({} ms, {}/{} this cycle)",
         resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
@@ -338,7 +532,7 @@ fn run_poke(args: PokeArgs) -> Result<()> {
                 "s"
             }
         );
-        println!("{}", resp.patch.trim_end());
+        emit_patch_maybe_colored(&resp.patch);
         eprintln!();
         eprintln!("Run `slop apply` to apply, or `slop apply --discard` to drop.");
     } else if !resp.cleanup_actions.is_empty() {
@@ -731,6 +925,7 @@ mod tests {
             project: None,
             repo: repo.map(str::to_string),
             gh: gh.map(str::to_string),
+            patch_only: false,
             dry_run: false,
         }
     }
@@ -738,6 +933,58 @@ mod tests {
     #[test]
     fn remote_repo_url_returns_none_when_neither_flag_set() {
         assert!(remote_repo_url(&args_with(None, None)).is_none());
+    }
+
+    fn args_with_range(range: &str) -> PokeArgs {
+        PokeArgs {
+            patch: None,
+            staged: false,
+            range: Some(range.to_string()),
+            since: None,
+            project: None,
+            repo: None,
+            gh: None,
+            patch_only: false,
+            dry_run: false,
+        }
+    }
+
+    fn args_with_since(since: &str) -> PokeArgs {
+        PokeArgs {
+            patch: None,
+            staged: false,
+            range: None,
+            since: Some(since.to_string()),
+            project: None,
+            repo: None,
+            gh: None,
+            patch_only: false,
+            dry_run: false,
+        }
+    }
+
+    // SLOP_REMOTE_CLONE_DEPTH is a process-global env var, so every
+    // assertion that depends on it lives in a single test to avoid
+    // races between parallel cargo-test threads.
+    #[test]
+    fn infer_clone_depth_covers_all_cases() {
+        std::env::remove_var("SLOP_REMOTE_CLONE_DEPTH");
+
+        // Branch / tag / SHA refs have no static bound → default 50.
+        assert_eq!(infer_clone_depth(&args_with_range("main..HEAD")), 50);
+        assert_eq!(infer_clone_depth(&args_with_range("origin/main...")), 50);
+        assert_eq!(infer_clone_depth(&args_with(None, None)), 50);
+
+        // HEAD~N selectors → N + 2 buffer.
+        assert_eq!(infer_clone_depth(&args_with_range("HEAD~5..HEAD")), 7);
+        assert_eq!(infer_clone_depth(&args_with_range("HEAD~1..HEAD")), 3);
+        assert_eq!(infer_clone_depth(&args_with_range("HEAD~8..HEAD~2")), 10);
+        assert_eq!(infer_clone_depth(&args_with_since("HEAD~3")), 5);
+
+        // Env override wins even when the selector would infer less.
+        std::env::set_var("SLOP_REMOTE_CLONE_DEPTH", "200");
+        assert_eq!(infer_clone_depth(&args_with_range("HEAD~5..HEAD")), 200);
+        std::env::remove_var("SLOP_REMOTE_CLONE_DEPTH");
     }
 
     #[test]
