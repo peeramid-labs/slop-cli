@@ -74,8 +74,7 @@ firing. No raw text is retained beyond the learning step.
 
 ## Quota
 
-- 50 pokes/month free per SSH key — no card required.
-- 100,000 pokes/month on the $20/mo plan.
+- 100,000 pokes/month per SSH key on the $20/mo plan.
 - 100 learn submissions/month per key, 1 MiB per submission.
 
 ## Bootstrap
@@ -88,8 +87,8 @@ slop login
 # ~/.config/slop/.
 ```
 
-First 50 pokes per month are free. After that, the response includes
-a Stripe Checkout URL — open it, subscribe, keep going.
+If the first `slop poke` returns 402, the response includes a Stripe
+Checkout URL. Open it, subscribe, retry.
 
 ## Quick reference
 

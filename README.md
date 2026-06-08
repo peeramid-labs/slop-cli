@@ -72,13 +72,11 @@ in `~/.cargo/bin/` — make sure that's on your `$PATH`.
 
 ```
 slop login                     # SSH-key handshake; cache identity
-slop poke                      # 50 free pokes/month, no card required
+slop poke                      # first call: 402 + Stripe Checkout URL
+                               # pay → next call lands findings + plan
 slop apply                     # auto-strip flagged lines, amend HEAD
 slop learn "false positive"    # shapes future scans
 ```
-
-50 pokes/month free. $20/mo unlocks 100,000/mo. Subscribe when you hit
-the cap — the API response surfaces a Stripe Checkout URL.
 
 `slop apply` runs `git apply` + `git commit --amend` locally. Use
 `--no-commit` if you want to inspect the staged diff first.
