@@ -7,6 +7,7 @@
 //!   slop billing tier|portal    subscription + usage / Stripe portal
 
 mod api;
+mod ssh_resolve;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,7 +50,9 @@ enum Mode {
 struct LoginArgs {
     #[arg(long, env = "SLOPPOKE_SERVER", default_value = DEFAULT_SERVER)]
     server: String,
-    /// Path to SSH public key (default `~/.ssh/id_ed25519.pub`).
+    /// Path to SSH public key. Default: ask `ssh -G <server-host>`
+    /// which identity OpenSSH would pick (same resolution git uses),
+    /// fall back to `~/.ssh/id_ed25519.pub`.
     #[arg(long)]
     pubkey: Option<PathBuf>,
     /// Path to matching private key (default: strip `.pub` suffix).
@@ -157,10 +160,16 @@ fn run_login(args: LoginArgs) -> Result<()> {
     // `foo.pub` instead of falling back to the default ed25519 pubkey
     // — otherwise discover would compute a fingerprint for one keypair
     // while signed requests use a different one (401 mismatch).
+    //
+    // With no explicit flags we ask OpenSSH which identity it would
+    // use for the server host (same resolution git observes). Only
+    // when ssh has no opinion do we fall back to the ed25519 default.
     let pubkey_path = match (args.pubkey.clone(), args.key.clone()) {
         (Some(p), _) => p,
         (None, Some(k)) => PathBuf::from(format!("{}.pub", k.display())),
-        (None, None) => default_pubkey_path(),
+        (None, None) => ssh_resolve::host_from_server_url(&args.server)
+            .and_then(|host| ssh_resolve::resolve_for_host(&host))
+            .unwrap_or_else(default_pubkey_path),
     };
     let pubkey_line = fs::read_to_string(&pubkey_path)
         .with_context(|| format!("read {}", pubkey_path.display()))?

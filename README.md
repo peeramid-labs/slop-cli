@@ -89,14 +89,12 @@ Per-account learn intake: **100 submissions/month, 1 MiB per
 submission.** Plenty for a small team; if you need more, ping
 [engineering@peeramid.xyz](mailto:engineering@peeramid.xyz).
 
-## Auth model
+## Auth
 
-- SSH key = identity. No accounts, no signups beyond Stripe checkout.
-- `slop login` reads `~/.ssh/id_ed25519.pub`, derives a canonical
-  fingerprint, caches it locally.
-- Each request signs `{method}\n{path}\n{timestamp}\n{sha256(body)}`
-  via `ssh-keygen -Y sign`. The server verifies the signature with
-  the in-band pubkey.
+SSH key = identity. `slop login` picks the key OpenSSH would use for
+the server host (same resolution git observes), caches the fingerprint
+locally, and signs each request with `ssh-keygen -Y sign`. No accounts,
+no signups beyond Stripe checkout.
 
 ## Claude skill
 
