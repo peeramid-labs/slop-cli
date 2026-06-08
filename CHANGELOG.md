@@ -1,3 +1,30 @@
+
+## [0.6.0] - 2026-06-08
+
+### 🚀 Features
+
+- *(cli)* Friendly version notice — checks GitHub Releases with 24h cache
+- *(cli)* Poke prints the proposed patch on stdout alongside the line summary
+- *(cli)* Infer clone depth from --range, cache repos, colorize patch, add --patch-only
+
+### 🐛 Bug Fixes
+
+- *(cli)* Clippy — char-array split sugar in version parser
+- *(cli)* --patch-only routes through TTY-aware emitter so terminal output stays colored
+- *(cli)* Drop per-line findings dump — it leaked detector keywords
+- *(cli)* Mark PokeResponse.findings as #[serde(default)]
+- *(cli)* Drop --patch-only flag — redundant with stdout/stderr split
+
+### 📚 Documentation
+
+- *(cli)* Surface git apply --unidiff-zero in the manual-apply hint
+- *(skill)* Cover --gh/--repo, --patch-only, persistent cache, color, knobs
+- *(changelog)* Bootstrap CHANGELOG.md with git-cliff full history
+
+### 🎨 Styling
+
+- Cargo fmt — collapse parse_version chain
+
 ## [unreleased]
 
 ### 🚀 Features
