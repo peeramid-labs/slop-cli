@@ -1,6 +1,6 @@
-# slop
+# sloppoke
 
-[![Release](https://img.shields.io/github/v/release/peeramid-labs/slop-cli?label=release)](https://github.com/peeramid-labs/slop-cli/releases)
+[![Release](https://img.shields.io/github/v/release/peeramid-labs/sloppoke?label=release)](https://github.com/peeramid-labs/sloppoke/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Server: slop.peeramid.xyz](https://img.shields.io/badge/server-slop.peeramid.xyz-green.svg)](https://slop.peeramid.xyz/)
 
@@ -59,8 +59,8 @@ APT repo still pending.
 ### Build from source
 
 ```
-git clone https://github.com/peeramid-labs/slop-cli.git
-cd slop-cli
+git clone https://github.com/peeramid-labs/sloppoke.git
+cd sloppoke
 cargo install --path crates/sloppoke-cli
 ```
 
