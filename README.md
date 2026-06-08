@@ -32,10 +32,26 @@ slop learn "this was a false positive on src/foo.rs"
 | Emoji-in-code    | Emoji embedded in source. Almost never deliberate in a real codebase; nearly always an LLM autograph. |
 | Restating code   | Comments that paraphrase the line below them instead of explaining WHY. |
 | Dead generics    | Type parameters declared but never referenced — speculative abstraction. |
+| Branch without test | New `if` / `switch` / `for` / `try` / `match` lands without a paired test file — the missing-coverage gap the LLM glossed over. |
 
 The detection engine improves continuously, server-side, so the
 catalog you scan against today is always the latest one — no
 re-install needed.
+
+## Supported languages
+
+Regex + comment-coverage detectors run on **any** source file. The
+deeper AST-driven passes (dead generics, branch-without-test, control-flow
+analysis) are wired for:
+
+- **Rust** — `.rs`
+- **TypeScript / JavaScript** — `.ts`, `.tsx`, `.js`, `.jsx`
+- **Python** — `.py`
+- **Go** — `.go`
+
+Files in unsupported languages still get the language-agnostic
+catalogue (AI scaffolding, naming slop, restating-code comments,
+emoji-in-code, half-finished markers). More grammars on request.
 
 ## Install
 
