@@ -18,7 +18,7 @@ use api::CleanupAction;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_SERVER: &str = "https://slop.peeramid.xyz";
+const DEFAULT_SERVER: &str = "https://sloppoke.me";
 const CACHED_PLAN: &str = ".slop/last-poke.json";
 
 #[derive(Parser, Debug)]

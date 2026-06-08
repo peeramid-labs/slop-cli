@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Extract the hostname from a server URL. Strips scheme, port, and
-/// path. `https://slop.peeramid.xyz:443/api` → `slop.peeramid.xyz`.
+/// path. `https://sloppoke.me:443/api` → `sloppoke.me`.
 pub fn host_from_server_url(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     let host_port = after_scheme.split('/').next()?;
@@ -88,12 +88,12 @@ mod tests {
     #[test]
     fn host_from_server_url_strips_scheme_and_port() {
         assert_eq!(
-            host_from_server_url("https://slop.peeramid.xyz").as_deref(),
-            Some("slop.peeramid.xyz")
+            host_from_server_url("https://sloppoke.me").as_deref(),
+            Some("sloppoke.me")
         );
         assert_eq!(
-            host_from_server_url("https://slop.peeramid.xyz:443/api/v1").as_deref(),
-            Some("slop.peeramid.xyz")
+            host_from_server_url("https://sloppoke.me:443/api/v1").as_deref(),
+            Some("sloppoke.me")
         );
         assert_eq!(
             host_from_server_url("http://192.168.1.135:3000").as_deref(),
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn parse_ssh_g_extracts_identityfile_lines_in_order() {
         let dump = "\
-host slop.peeramid.xyz
+host sloppoke.me
 user tim
 identityfile ~/.ssh/id_rsa
 identityfile ~/.ssh/id_ed25519
