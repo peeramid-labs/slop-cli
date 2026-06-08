@@ -499,12 +499,15 @@ fn run_poke(args: PokeArgs) -> Result<()> {
 
     let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
     // --patch-only: skip every human-facing line, emit only the diff.
-    // Pairs naturally with shell redirection: `slop poke … > slop.patch`
-    // gives a file containing nothing but the unified diff.
+    // The TTY-aware emitter colors when stdout is a terminal and
+    // strips ANSI for pipes / redirections, so
+    // `slop poke … --patch-only` still pops on screen and
+    // `slop poke … --patch-only > slop.patch` writes a clean uncolored
+    // file.
     if args.patch_only {
         save_plan(&resp)?;
         if !resp.patch.trim().is_empty() {
-            println!("{}", resp.patch.trim_end());
+            emit_patch_maybe_colored(&resp.patch);
         }
         return Ok(());
     }
