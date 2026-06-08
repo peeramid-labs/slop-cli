@@ -72,11 +72,6 @@ That signal teaches the engine for your account and project
 specifically. Over the next scans the same false positive should stop
 firing. No raw text is retained beyond the learning step.
 
-## Quota
-
-- 100,000 pokes/month per SSH key on the $20/mo plan.
-- 100 learn submissions/month per key, 1 MiB per submission.
-
 ## Bootstrap
 
 ```bash
@@ -87,8 +82,8 @@ slop login
 # ~/.config/slop/.
 ```
 
-If the first `slop poke` returns 402, the response includes a Stripe
-Checkout URL. Open it, subscribe, retry.
+If `slop poke` returns 402, the response includes a Stripe Checkout
+URL. Open it, subscribe, retry.
 
 ## Quick reference
 

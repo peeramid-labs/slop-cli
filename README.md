@@ -72,8 +72,7 @@ in `~/.cargo/bin/` — make sure that's on your `$PATH`.
 
 ```
 slop login                     # SSH-key handshake; cache identity
-slop poke                      # first call: 402 + Stripe Checkout URL
-                               # pay → next call lands findings + plan
+slop poke                      # scan; 402 returns a Stripe Checkout URL
 slop apply                     # auto-strip flagged lines, amend HEAD
 slop learn "false positive"    # shapes future scans
 ```
@@ -93,8 +92,7 @@ catalog could not be.
 > slop does not retain user information. Learning signals are folded
 > into the model and the raw inputs do not persist.
 
-Per-account learn intake: **100 submissions/month, 1 MiB per
-submission.** Plenty for a small team; if you need more, ping
+Need more headroom or have an unusual workload? Ping
 [engineering@peeramid.xyz](mailto:engineering@peeramid.xyz).
 
 ## Auth
