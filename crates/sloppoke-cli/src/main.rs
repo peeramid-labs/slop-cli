@@ -319,10 +319,30 @@ fn run_poke(args: PokeArgs) -> Result<()> {
         resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
     );
     for f in &resp.findings {
-        println!("[{}] {}:{} — {}", f.category, f.file, f.line, f.matched);
+        eprintln!("[{}] {}:{} — {}", f.category, f.file, f.line, f.matched);
     }
     save_plan(&resp)?;
-    if !resp.cleanup_actions.is_empty() {
+    // Print the server-rendered patch on stdout so the user sees the
+    // exact changes `slop apply` would mutate, AND so they can
+    // pipe it to `git apply` / `bat -l diff` / `delta` etc. without
+    // any extra plumbing. Stderr keeps the human summary so
+    // redirection still gives a clean machine-readable diff.
+    if !resp.patch.trim().is_empty() {
+        eprintln!();
+        eprintln!(
+            "─── proposed patch ({} hunk{}) ───",
+            resp.cleanup_actions.len(),
+            if resp.cleanup_actions.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        println!("{}", resp.patch.trim_end());
+        eprintln!();
+        eprintln!("Run `slop apply` to apply, or `slop apply --discard` to drop.");
+    } else if !resp.cleanup_actions.is_empty() {
+        // Older server may return actions without a rendered patch.
         eprintln!(
             "slop: {} line(s) flagged. Run `slop apply` to strip them.",
             resp.cleanup_actions.len()
