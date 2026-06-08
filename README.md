@@ -21,37 +21,29 @@ slop apply                 # auto-clean flagged lines, amend HEAD
 slop learn "this was a false positive on src/foo.rs"
 ```
 
-## What it catches
+## What it does
 
-| kind | what it is |
-|---|---|
-| AI scaffolding   | Numbered "Step N" / "First, …" / "Now we will …" comments that document the act of writing the code instead of explaining the code. |
-| Naming slop      | Vague verb-led functions and Manager/Helper/Util class names — placeholder identifiers an LLM reaches for when the real name would require thought. |
-| Defensive crud   | Empty exception swallows and redundant null guards added "so it doesn't crash" instead of fixing the underlying assumption. |
-| Half-finished    | Unfinished-business markers: TODO/FIXME asking the next reader to implement the actual logic. |
-| Emoji-in-code    | Emoji embedded in source. Almost never deliberate in a real codebase; nearly always an LLM autograph. |
-| Restating code   | Comments that paraphrase the line below them instead of explaining WHY. |
-| Dead generics    | Type parameters declared but never referenced — speculative abstraction. |
-| Branch without test | New `if` / `switch` / `for` / `try` / `match` lands without a paired test file — the missing-coverage gap the LLM glossed over. |
+slop sweeps your diff through a blazing-fast machine-learning engine
+that knows what AI-generated code looks like — and pulls it out before
+you ship.
 
-The detection engine improves continuously, server-side, so the
-catalog you scan against today is always the latest one — no
-re-install needed.
+- **Catches the artefacts an LLM leaves behind.** Scaffolding
+  comments, placeholder identifiers, defensive crud, half-finished
+  markers, untested branches — the residue that survives "looks fine"
+  review but rots six months later.
+- **Adapts to your codebase.** Every `slop learn` you submit tunes the
+  engine for your account and your project. The catalogue you scan
+  against on day 30 isn't the catalogue you started with — it's the
+  one calibrated to your team's idioms.
+- **Fixes what's safe, flags what isn't.** Mechanical noise is
+  stripped automatically; anything that could change behaviour gets a
+  TODO comment spliced into your diff for you to decide on. The CLI
+  refuses to mutate your tree unless `git apply` agrees the change is
+  clean.
 
-## Supported languages
-
-Regex + comment-coverage detectors run on **any** source file. The
-deeper AST-driven passes (dead generics, branch-without-test, control-flow
-analysis) are wired for:
-
-- **Rust** — `.rs`
-- **TypeScript / JavaScript** — `.ts`, `.tsx`, `.js`, `.jsx`
-- **Python** — `.py`
-- **Go** — `.go`
-
-Files in unsupported languages still get the language-agnostic
-catalogue (AI scaffolding, naming slop, restating-code comments,
-emoji-in-code, half-finished markers). More grammars on request.
+Detection runs server-side and updates continuously — no re-install
+needed. Works on every language; the deepest analysis lights up first
+for Rust, TypeScript/JavaScript, Python, and Go.
 
 ## Install
 

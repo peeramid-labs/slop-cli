@@ -6,16 +6,12 @@ when_to_use: Use before every commit. Especially when the change was authored or
 
 # slop — AI-slop firewall
 
-slop catches AI-pattern scaffolding, naming slop, defensive crud,
-half-finished TODO placeholders, emoji-in-code, restating-code
-comments, dead generics, redundant boolean comparisons, empty error
-throws, useless promise wrapping, off-by-one loop bounds, no-arg
-console.log calls, catch-and-rethrow, redundant null checks, AND new
-control-flow branches that ship without a paired test (Rust, TS/JS,
-Python, Go). Detection runs on the server. The CLI sends the patch,
-caches the server-rendered fix-patch, and applies it via `git apply`.
-Adapts to your codebase via the `slop learn` channel — feedback you
-submit shapes future scans for your account.
+slop sweeps your diff through a blazing-fast machine-learning engine
+that knows what AI-generated code looks like — scaffolding residue,
+placeholder identifiers, defensive crud, half-finished markers,
+untested branches — and pulls it out before you ship. The engine
+adapts to your account through the `slop learn` channel: every
+correction you submit calibrates future scans for your codebase.
 
 ## Pre-commit flow
 
