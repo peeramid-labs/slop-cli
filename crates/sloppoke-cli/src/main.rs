@@ -285,6 +285,19 @@ fn save_plan(r: &api::PokeResponse) -> Result<()> {
 
 // ── apply ────────────────────────────────────────────────────────
 
+/// Lower priority value = applied first within the same line. Delete
+/// before insert: if a slop line has BOTH a delete-line action and an
+/// insert-above-it action, we want the deletion to land first so the
+/// inserted TODO comment sits above the line the slop used to occupy
+/// — not above the slop itself.
+fn action_priority(action: &str) -> u8 {
+    match action {
+        "delete_line" => 0,
+        "insert_above" => 1,
+        _ => 9,
+    }
+}
+
 fn run_apply(args: ApplyArgs) -> Result<()> {
     let path = PathBuf::from(CACHED_PLAN);
     if args.discard {
@@ -315,7 +328,17 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
     }
     let mut touched = Vec::new();
     for (file, mut acts) in by_file {
-        acts.sort_by_key(|b| std::cmp::Reverse(b.line));
+        // Sort by line descending so later mutations don't shift the
+        // indices we still need to address. Within a single line:
+        // process delete_line before insert_above so an insert above a
+        // line we're also deleting still lands at the right relative
+        // position (the deleted line was the slop; the TODO replaces
+        // surrounding context).
+        acts.sort_by(|a, b| {
+            b.line
+                .cmp(&a.line)
+                .then_with(|| action_priority(&a.action).cmp(&action_priority(&b.action)))
+        });
         if !PathBuf::from(&file).exists() {
             eprintln!("slop: skip {file} (not in working tree)");
             continue;
@@ -324,26 +347,64 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
         let mut lines: Vec<String> = body.lines().map(String::from).collect();
         let trailing_newline = body.ends_with('\n');
         let mut deleted = 0usize;
+        let mut inserted = 0usize;
         for a in acts {
-            if a.action != "delete_line" {
+            let Some(idx) = a.line.checked_sub(1) else {
                 continue;
-            }
-            let idx = match a.line.checked_sub(1) {
-                Some(n) if n < lines.len() => n,
-                _ => continue,
             };
-            let actual = lines[idx].trim_end_matches('\r');
-            if actual != a.content.trim_end_matches('\r') {
-                eprintln!(
-                    "slop: skip {file}:{} — content drifted (expected {:?}, got {:?})",
-                    a.line, a.content, actual
-                );
-                continue;
+            match a.action.as_str() {
+                "delete_line" => {
+                    if idx >= lines.len() {
+                        continue;
+                    }
+                    let actual = lines[idx].trim_end_matches('\r');
+                    if actual != a.content.trim_end_matches('\r') {
+                        eprintln!(
+                            "slop: skip {file}:{} — content drifted (expected {:?}, got {:?})",
+                            a.line, a.content, actual
+                        );
+                        continue;
+                    }
+                    lines.remove(idx);
+                    deleted += 1;
+                }
+                "insert_above" => {
+                    // Off-by-one tolerance: allow idx == lines.len()
+                    // so a slop hit on the final line still gets a
+                    // comment spliced above it.
+                    if idx > lines.len() {
+                        continue;
+                    }
+                    // Idempotent: the TODO is "already present" if
+                    //   (a) the line above the target matches it
+                    //       (fresh apply against the original line
+                    //       numbering), or
+                    //   (b) the target line itself matches it (re-apply
+                    //       of a stale plan whose line numbers no
+                    //       longer reflect the post-insert file).
+                    let already_above = idx
+                        .checked_sub(1)
+                        .and_then(|i| lines.get(i))
+                        .map(|prev| prev.trim() == a.content.trim())
+                        .unwrap_or(false);
+                    let already_here = lines
+                        .get(idx)
+                        .map(|here| here.trim() == a.content.trim())
+                        .unwrap_or(false);
+                    if already_above || already_here {
+                        continue;
+                    }
+                    lines.insert(idx, a.content.clone());
+                    inserted += 1;
+                }
+                _ => {
+                    // Unknown action — surfacing on a future server
+                    // protocol bump; safest is to skip.
+                    continue;
+                }
             }
-            lines.remove(idx);
-            deleted += 1;
         }
-        if deleted == 0 {
+        if deleted == 0 && inserted == 0 {
             continue;
         }
         let mut out = lines.join("\n");
@@ -351,18 +412,24 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
             out.push('\n');
         }
         fs::write(&file, out).with_context(|| format!("write {file}"))?;
-        touched.push((file, deleted));
+        touched.push((file, deleted, inserted));
     }
 
     if touched.is_empty() {
-        eprintln!("slop: no clean deletes (content drift); leaving working tree intact");
+        eprintln!("slop: no clean changes to apply; leaving working tree intact");
         return Ok(());
     }
-    for (f, n) in &touched {
-        eprintln!("slop: trimmed {n} line(s) from {f}");
+    for (f, del, ins) in &touched {
+        match (*del, *ins) {
+            (d, 0) => eprintln!("slop: trimmed {d} line(s) from {f}"),
+            (0, i) => eprintln!("slop: spliced {i} TODO comment(s) into {f}"),
+            (d, i) => {
+                eprintln!("slop: trimmed {d} line(s) and spliced {i} TODO comment(s) into {f}")
+            }
+        }
     }
     let mut add_args = vec!["add", "--"];
-    for (f, _) in &touched {
+    for (f, _, _) in &touched {
         add_args.push(f);
     }
     git_run(&add_args)?;
