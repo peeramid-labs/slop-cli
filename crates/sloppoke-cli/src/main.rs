@@ -256,6 +256,12 @@ fn run_poke(args: PokeArgs) -> Result<()> {
 struct CachedPlan {
     poke_id: String,
     verdict: String,
+    /// Server-rendered unified diff. Preferred apply target.
+    #[serde(default)]
+    patch: String,
+    /// Legacy structured action list. Kept so a stale plan from an
+    /// older server still applies via the action-walker fallback.
+    #[serde(default)]
     cleanup_actions: Vec<CleanupAction>,
 }
 
@@ -268,6 +274,7 @@ fn save_plan(r: &api::PokeResponse) -> Result<()> {
     let plan = CachedPlan {
         poke_id: r.poke_id.clone(),
         verdict: r.verdict.clone(),
+        patch: r.patch.clone(),
         cleanup_actions: r
             .cleanup_actions
             .iter()
@@ -316,9 +323,16 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&plan)?);
         return Ok(());
     }
-    if plan.cleanup_actions.is_empty() {
+    if plan.patch.trim().is_empty() && plan.cleanup_actions.is_empty() {
         eprintln!("slop: nothing to apply (LGTM)");
         return Ok(());
+    }
+
+    // Primary path: server gave us a unified diff. Hand it to
+    // `git apply --unidiff-zero --index -`. Battle-tested mutator,
+    // zero CLI-side line arithmetic.
+    if !plan.patch.trim().is_empty() {
+        return apply_via_git(&plan, args);
     }
 
     let mut by_file: std::collections::BTreeMap<String, Vec<&CleanupAction>> =
@@ -495,6 +509,65 @@ fn git_run(args: &[&str]) -> Result<()> {
     if !status.success() {
         bail!("git {} failed (exit {:?})", args.join(" "), status.code());
     }
+    Ok(())
+}
+
+/// Apply a server-rendered unified diff via `git apply
+/// --unidiff-zero --index`. Stdin carries the patch; on success the
+/// working tree is mutated and the changes are staged. If
+/// `args.no_commit` is false we also amend HEAD so the slop never
+/// ships as a separate commit.
+fn apply_via_git(plan: &CachedPlan, args: ApplyArgs) -> Result<()> {
+    use std::io::Write;
+    // Dry-run preflight: --check exits non-zero if the diff would not
+    // apply cleanly. Surface the actual git stderr so the user knows
+    // why before we mutate anything.
+    let mut check = Command::new("git")
+        .args(["apply", "--unidiff-zero", "--check", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("spawn git apply --check")?;
+    check
+        .stdin
+        .as_mut()
+        .expect("stdin piped")
+        .write_all(plan.patch.as_bytes())
+        .context("write patch to git apply --check")?;
+    let preflight = check.wait_with_output().context("wait git apply --check")?;
+    if !preflight.status.success() {
+        let stderr = String::from_utf8_lossy(&preflight.stderr);
+        bail!(
+            "patch would not apply cleanly — leaving working tree untouched.\ngit apply --check:\n{stderr}"
+        );
+    }
+
+    let mut apply = Command::new("git")
+        .args(["apply", "--unidiff-zero", "--index", "-"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .context("spawn git apply")?;
+    apply
+        .stdin
+        .as_mut()
+        .expect("stdin piped")
+        .write_all(plan.patch.as_bytes())
+        .context("write patch to git apply")?;
+    let status = apply.wait().context("wait git apply")?;
+    if !status.success() {
+        bail!(
+            "git apply failed after --check passed (exit {:?}) — re-run with RUST_LOG=debug for detail",
+            status.code()
+        );
+    }
+
+    eprintln!("slop: applied server patch (verdict: {})", plan.verdict);
+    if args.no_commit {
+        eprintln!("slop: staged. Commit when ready.");
+        return Ok(());
+    }
+    git_run(&["commit", "--amend", "--no-edit"])?;
+    eprintln!("slop: HEAD amended.");
     Ok(())
 }
 

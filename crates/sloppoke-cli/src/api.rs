@@ -103,6 +103,14 @@ pub struct UsageRow {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PokeResponse {
     pub findings: Vec<PokeFinding>,
+    /// Unified-diff patch the CLI prefers via `git apply`. Empty when
+    /// the server has nothing actionable (LGTM or flag-only hits) or
+    /// when an older server didn't ship the field.
+    #[serde(default)]
+    pub patch: String,
+    /// Legacy structured action list. CLI falls back to this only when
+    /// `patch` is empty AND the response carries actions, so an older
+    /// CLI talking to a newer server keeps working too.
     #[serde(default)]
     pub cleanup_actions: Vec<CleanupAction>,
     pub elapsed_ms: u64,

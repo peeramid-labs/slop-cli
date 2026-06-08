@@ -113,6 +113,139 @@ fn apply_discard_removes_plan() {
     assert!(!plan_path.exists(), "plan should have been deleted");
 }
 
+/// Patch-first apply: the server now ships a unified diff and the
+/// CLI runs it through `git apply --unidiff-zero --index`. The
+/// cleanup_actions list is ignored when `patch` is present.
+#[test]
+fn apply_patch_path_runs_git_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@example.com"],
+        vec!["config", "user.name", "test"],
+    ] {
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(root)
+            .status()
+            .unwrap();
+    }
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/foo.ts"),
+        "let x = 1;\n// Step 1: bogus\nlet y = 2;\n",
+    )
+    .unwrap();
+    std::process::Command::new("git")
+        .args(["add", "src/foo.ts"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-q", "-m", "init"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+
+    std::fs::create_dir_all(root.join(".slop")).unwrap();
+    let patch = "diff --git a/src/foo.ts b/src/foo.ts\n\
+                 --- a/src/foo.ts\n\
+                 +++ b/src/foo.ts\n\
+                 @@ -2,1 +2,0 @@\n\
+                 -// Step 1: bogus\n";
+    let plan = serde_json::json!({
+        "poke_id": "x",
+        "verdict": "SLOP",
+        "patch": patch,
+        "cleanup_actions": []
+    });
+    std::fs::write(
+        root.join(".slop/last-poke.json"),
+        serde_json::to_string(&plan).unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("slop").unwrap();
+    cmd.current_dir(root)
+        .args(["apply", "--no-commit"])
+        .assert()
+        .success()
+        .stderr(contains("applied server patch"));
+    let after = std::fs::read_to_string(root.join("src/foo.ts")).unwrap();
+    assert!(
+        !after.contains("Step 1: bogus"),
+        "slop line should be gone:\n{after}"
+    );
+    assert!(after.contains("let x = 1;"));
+    assert!(after.contains("let y = 2;"));
+}
+
+/// When the server patch wouldn't apply cleanly, the CLI bails BEFORE
+/// touching the working tree (preflight via `git apply --check`).
+#[test]
+fn apply_patch_path_refuses_to_mutate_on_check_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@example.com"],
+        vec!["config", "user.name", "test"],
+    ] {
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(root)
+            .status()
+            .unwrap();
+    }
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    let original = "let x = 1;\nlet y = 2;\n";
+    std::fs::write(root.join("src/foo.ts"), original).unwrap();
+    std::process::Command::new("git")
+        .args(["add", "src/foo.ts"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-q", "-m", "init"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+
+    std::fs::create_dir_all(root.join(".slop")).unwrap();
+    // Patch references a line that doesn't exist with the expected
+    // content — `git apply --check` must refuse it.
+    let bad_patch = "diff --git a/src/foo.ts b/src/foo.ts\n\
+                     --- a/src/foo.ts\n\
+                     +++ b/src/foo.ts\n\
+                     @@ -1,1 +1,0 @@\n\
+                     -this line is not in the file\n";
+    let plan = serde_json::json!({
+        "poke_id": "x",
+        "verdict": "SLOP",
+        "patch": bad_patch,
+        "cleanup_actions": []
+    });
+    std::fs::write(
+        root.join(".slop/last-poke.json"),
+        serde_json::to_string(&plan).unwrap(),
+    )
+    .unwrap();
+
+    Command::cargo_bin("slop")
+        .unwrap()
+        .current_dir(root)
+        .args(["apply", "--no-commit"])
+        .assert()
+        .failure()
+        .stderr(contains("would not apply cleanly"));
+    let after = std::fs::read_to_string(root.join("src/foo.ts")).unwrap();
+    assert_eq!(
+        after, original,
+        "working tree must be untouched on preflight failure"
+    );
+}
+
 /// Initialise a throwaway repo, write `src/foo.ts` + a cached plan
 /// asking for an insert_above on line 3, then run `slop apply
 /// --no-commit`. Asserts the comment was spliced and staged.
