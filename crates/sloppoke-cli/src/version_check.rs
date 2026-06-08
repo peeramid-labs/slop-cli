@@ -94,7 +94,7 @@ fn fetch_latest_tag() -> Option<String> {
 fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let trimmed = s.trim().trim_start_matches('v').trim_start_matches('V');
     let head = trimmed
-        .split(|c: char| c == '-' || c == '+' || c == '_')
+        .split(['-', '+', '_'])
         .next()?;
     let mut parts = head.split('.').filter_map(|p| p.parse::<u32>().ok());
     let major = parts.next()?;
