@@ -537,7 +537,10 @@ fn run_poke(args: PokeArgs) -> Result<()> {
         );
         emit_patch_maybe_colored(&resp.patch);
         eprintln!();
-        eprintln!("Run `slop apply` to apply, or `slop apply --discard` to drop.");
+        eprintln!(
+            "Run `slop apply` to apply, `slop apply --discard` to drop, \
+             or `git apply --unidiff-zero` if applying manually."
+        );
     } else if !resp.cleanup_actions.is_empty() {
         // Older server may return actions without a rendered patch.
         eprintln!(
