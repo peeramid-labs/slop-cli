@@ -81,6 +81,17 @@ struct PokeArgs {
     /// bucket the row in the learn store. Not billing-relevant.
     #[arg(long)]
     project: Option<String>,
+    /// Scan an arbitrary git URL instead of the local working tree.
+    /// Shallow-clones the repo into a temp dir, runs the chosen
+    /// range/since/staged selector against it, ships the patch to
+    /// the server, cleans up. Works on any git host.
+    /// Example: `slop poke --repo https://github.com/user/foo --range HEAD~5..HEAD`
+    #[arg(long, conflicts_with = "patch")]
+    repo: Option<String>,
+    /// Shorthand for `--repo https://github.com/<arg>.git`.
+    /// Example: `slop poke --gh openclaw/openclaw --range HEAD~5..HEAD`
+    #[arg(long, conflicts_with_all = ["patch", "repo"])]
+    gh: Option<String>,
     /// Print the request JSON and exit without contacting the server.
     #[arg(long)]
     dry_run: bool,
@@ -217,10 +228,72 @@ fn derive_key_from_pubkey(p: &Path) -> PathBuf {
 
 // ── poke ─────────────────────────────────────────────────────────
 
+/// Resolve the effective remote git URL from either --repo or --gh.
+/// --gh is the short form for github.com only; --repo accepts any git
+/// URL the local git binary knows how to clone (https/ssh/git://).
+fn remote_repo_url(args: &PokeArgs) -> Option<String> {
+    if let Some(url) = args.repo.as_deref() {
+        return Some(url.to_string());
+    }
+    if let Some(slug) = args.gh.as_deref() {
+        // Accept either `org/repo` or a full URL the user fat-fingered
+        // into --gh. The latter just passes through to git clone.
+        if slug.starts_with("http") || slug.starts_with("git@") {
+            return Some(slug.to_string());
+        }
+        return Some(format!("https://github.com/{slug}.git"));
+    }
+    None
+}
+
+/// Shallow-clone the URL into a unique temp dir and hand back a
+/// TempDir guard. Drop wipes the checkout on exit. Depth 50 covers
+/// every realistic `--range HEAD~N..HEAD` we'd want to scan; bump
+/// the env override if you need more history.
+fn remote_clone(url: String) -> Result<tempfile::TempDir> {
+    let depth = std::env::var("SLOP_REMOTE_CLONE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(50);
+    let tmp = tempfile::Builder::new()
+        .prefix("slop-scan-")
+        .tempdir()
+        .context("create temp dir for --repo clone")?;
+    eprintln!("slop: cloning {url} (depth {depth})…");
+    let depth_s = depth.to_string();
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            &depth_s,
+            "--quiet",
+            "--no-tags",
+            &url,
+            tmp.path().to_str().context("temp path not utf-8")?,
+        ])
+        .status()
+        .context("spawn git clone")?;
+    if !status.success() {
+        bail!("git clone {url} failed (exit {:?})", status.code());
+    }
+    Ok(tmp)
+}
+
 fn run_poke(args: PokeArgs) -> Result<()> {
     let cfg =
         api::load_config().context("`slop poke` needs a server config. Run `slop login` first.")?;
-    let (patch, source) = resolve_patch(&args)?;
+    // --repo / --gh: shallow-clone an arbitrary git URL into a temp
+    // dir, run the rest of the resolver from inside it. tempdir Drop
+    // cleans the checkout regardless of success/panic.
+    let remote_workdir = remote_repo_url(&args).map(remote_clone).transpose()?;
+    let (patch, source) = if let Some(ref tmp) = remote_workdir {
+        std::env::set_current_dir(tmp.path())
+            .with_context(|| format!("chdir into cloned repo {}", tmp.path().display()))?;
+        let (p, s) = resolve_patch(&args)?;
+        (p, format!("{s} @ {}", remote_repo_url(&args).unwrap()))
+    } else {
+        resolve_patch(&args)?
+    };
     if patch.trim().is_empty() {
         bail!("nothing to scan ({source})");
     }
@@ -616,5 +689,78 @@ fn run_billing(cmd: BillingCmd) -> Result<()> {
             let _ = Command::new("open").arg(&resp.url).status();
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args_with(repo: Option<&str>, gh: Option<&str>) -> PokeArgs {
+        PokeArgs {
+            patch: None,
+            staged: false,
+            range: None,
+            since: None,
+            project: None,
+            repo: repo.map(str::to_string),
+            gh: gh.map(str::to_string),
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn remote_repo_url_returns_none_when_neither_flag_set() {
+        assert!(remote_repo_url(&args_with(None, None)).is_none());
+    }
+
+    #[test]
+    fn remote_repo_url_passes_repo_through_verbatim() {
+        let a = args_with(Some("https://gitlab.com/owner/proj.git"), None);
+        assert_eq!(
+            remote_repo_url(&a).as_deref(),
+            Some("https://gitlab.com/owner/proj.git")
+        );
+    }
+
+    #[test]
+    fn remote_repo_url_expands_gh_slug_to_github_https() {
+        let a = args_with(None, Some("openclaw/openclaw"));
+        assert_eq!(
+            remote_repo_url(&a).as_deref(),
+            Some("https://github.com/openclaw/openclaw.git")
+        );
+    }
+
+    #[test]
+    fn remote_repo_url_accepts_full_url_in_gh() {
+        // Defensive: if the user fat-fingers a full URL into --gh
+        // instead of the org/repo slug, pass it through rather than
+        // rewriting it into `https://github.com/https://…`.
+        let a = args_with(None, Some("git@github.com:foo/bar.git"));
+        assert_eq!(
+            remote_repo_url(&a).as_deref(),
+            Some("git@github.com:foo/bar.git")
+        );
+        let a = args_with(None, Some("https://example.test/foo.git"));
+        assert_eq!(
+            remote_repo_url(&a).as_deref(),
+            Some("https://example.test/foo.git")
+        );
+    }
+
+    #[test]
+    fn remote_repo_url_prefers_repo_over_gh_when_both_set() {
+        // clap should reject this combination at parse time
+        // (conflicts_with), but the function should still pick
+        // deterministically if invoked programmatically.
+        let a = args_with(
+            Some("https://repo.test/x.git"),
+            Some("ignored/forsclap-violators"),
+        );
+        assert_eq!(
+            remote_repo_url(&a).as_deref(),
+            Some("https://repo.test/x.git")
+        );
     }
 }
