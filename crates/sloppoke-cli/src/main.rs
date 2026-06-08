@@ -8,6 +8,7 @@
 
 mod api;
 mod ssh_resolve;
+mod version_check;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -150,6 +151,11 @@ fn main() {
             1
         }
     };
+    // Surface a friendly heads-up if a newer release exists. Runs
+    // AFTER the user's primary output so the line scrolls past
+    // whatever they came to see, never replaces it. All errors
+    // (offline, rate-limited, parse failure) are swallowed inside.
+    version_check::notify_if_outdated();
     std::process::exit(rc);
 }
 
