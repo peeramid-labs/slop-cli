@@ -508,15 +508,14 @@ fn run_poke(args: PokeArgs) -> Result<()> {
     // any extra plumbing. Stderr keeps the human summary so
     // redirection still gives a clean machine-readable diff.
     if !resp.patch.trim().is_empty() {
+        // Count `@@` hunk headers directly from the patch text —
+        // server stopped shipping cleanup_actions so we can't lean on
+        // its length anymore.
+        let hunks = resp.patch.lines().filter(|l| l.starts_with("@@")).count();
         eprintln!();
         eprintln!(
-            "─── proposed patch ({} hunk{}) ───",
-            resp.cleanup_actions.len(),
-            if resp.cleanup_actions.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
+            "─── proposed patch ({hunks} hunk{}) ───",
+            if hunks == 1 { "" } else { "s" }
         );
         emit_patch_maybe_colored(&resp.patch);
         eprintln!();
