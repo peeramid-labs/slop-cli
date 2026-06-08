@@ -493,13 +493,24 @@ fn run_poke(args: PokeArgs) -> Result<()> {
 
     let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
     save_plan(&resp)?;
-    // Output is the unified-diff patch and only the unified-diff patch.
-    // Stderr stays silent — caller can derive LGTM vs SLOP from exit
-    // code (0) + whether stdout was empty. Pipes / redirections /
-    // pagers all work uniformly: `slop poke > foo.patch`,
-    // `slop poke | git apply --unidiff-zero`, `slop poke | delta`.
+    // Verdict + quota line lives on stderr so it's visible to
+    // interactive users (self-teaching, quota awareness) without
+    // polluting `> foo.patch` redirections or `| git apply` pipes.
+    eprintln!(
+        "slop poke: {} ({} ms, {}/{} this cycle)",
+        resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
+    );
+    // The unified-diff patch on stdout. Color-aware for TTYs, ANSI
+    // stripped for pipes / redirections so `git apply --unidiff-zero`
+    // still works as a one-liner.
     if !resp.patch.trim().is_empty() {
         emit_patch_maybe_colored(&resp.patch);
+        // Apply hint on stderr — first-time users get the obvious
+        // next step without having to read --help.
+        eprintln!(
+            "\nRun `slop apply` to apply, `slop apply --discard` to drop, \
+             or `git apply --unidiff-zero` if applying manually."
+        );
     }
     Ok(())
 }
