@@ -492,43 +492,14 @@ fn run_poke(args: PokeArgs) -> Result<()> {
     }
 
     let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
-    eprintln!(
-        "slop poke: {} ({} ms, {}/{} this cycle)",
-        resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
-    );
-    // Per-line `[category] file:line — match` dumps used to print here.
-    // Removed: they advertise which exact keywords + identifier shapes
-    // the detector keys off. The proposed patch already surfaces every
-    // flagged line in context, so the reviewer sees what changed without
-    // a recipe for circumventing the catalog.
     save_plan(&resp)?;
-    // Print the server-rendered patch on stdout so the user sees the
-    // exact changes `slop apply` would mutate, AND so they can
-    // pipe it to `git apply` / `bat -l diff` / `delta` etc. without
-    // any extra plumbing. Stderr keeps the human summary so
-    // redirection still gives a clean machine-readable diff.
+    // Output is the unified-diff patch and only the unified-diff patch.
+    // Stderr stays silent — caller can derive LGTM vs SLOP from exit
+    // code (0) + whether stdout was empty. Pipes / redirections /
+    // pagers all work uniformly: `slop poke > foo.patch`,
+    // `slop poke | git apply --unidiff-zero`, `slop poke | delta`.
     if !resp.patch.trim().is_empty() {
-        // Count `@@` hunk headers directly from the patch text —
-        // server stopped shipping cleanup_actions so we can't lean on
-        // its length anymore.
-        let hunks = resp.patch.lines().filter(|l| l.starts_with("@@")).count();
-        eprintln!();
-        eprintln!(
-            "─── proposed patch ({hunks} hunk{}) ───",
-            if hunks == 1 { "" } else { "s" }
-        );
         emit_patch_maybe_colored(&resp.patch);
-        eprintln!();
-        eprintln!(
-            "Run `slop apply` to apply, `slop apply --discard` to drop, \
-             or `git apply --unidiff-zero` if applying manually."
-        );
-    } else if !resp.cleanup_actions.is_empty() {
-        // Older server may return actions without a rendered patch.
-        eprintln!(
-            "slop: {} line(s) flagged. Run `slop apply` to strip them.",
-            resp.cleanup_actions.len()
-        );
     }
     Ok(())
 }
