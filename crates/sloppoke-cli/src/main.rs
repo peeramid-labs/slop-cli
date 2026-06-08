@@ -93,12 +93,6 @@ struct PokeArgs {
     /// Example: `slop poke --gh openclaw/openclaw --range HEAD~5..HEAD`
     #[arg(long, conflicts_with_all = ["patch", "repo"])]
     gh: Option<String>,
-    /// Print only the unified-diff patch on stdout — no verdict line,
-    /// no per-finding summary, no apply hint. Combine with shell
-    /// redirection to capture a clean patch file:
-    /// `slop poke --gh user/repo --range main..HEAD --patch-only > slop.patch`
-    #[arg(long, conflicts_with = "dry_run")]
-    patch_only: bool,
     /// Print the request JSON and exit without contacting the server.
     #[arg(long)]
     dry_run: bool,
@@ -498,19 +492,6 @@ fn run_poke(args: PokeArgs) -> Result<()> {
     }
 
     let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
-    // --patch-only: skip every human-facing line, emit only the diff.
-    // The TTY-aware emitter colors when stdout is a terminal and
-    // strips ANSI for pipes / redirections, so
-    // `slop poke … --patch-only` still pops on screen and
-    // `slop poke … --patch-only > slop.patch` writes a clean uncolored
-    // file.
-    if args.patch_only {
-        save_plan(&resp)?;
-        if !resp.patch.trim().is_empty() {
-            emit_patch_maybe_colored(&resp.patch);
-        }
-        return Ok(());
-    }
     eprintln!(
         "slop poke: {} ({} ms, {}/{} this cycle)",
         resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
@@ -933,7 +914,6 @@ mod tests {
             project: None,
             repo: repo.map(str::to_string),
             gh: gh.map(str::to_string),
-            patch_only: false,
             dry_run: false,
         }
     }
@@ -952,7 +932,6 @@ mod tests {
             project: None,
             repo: None,
             gh: None,
-            patch_only: false,
             dry_run: false,
         }
     }
@@ -966,7 +945,6 @@ mod tests {
             project: None,
             repo: None,
             gh: None,
-            patch_only: false,
             dry_run: false,
         }
     }
