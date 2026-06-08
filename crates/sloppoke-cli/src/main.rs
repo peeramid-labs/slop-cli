@@ -515,9 +515,11 @@ fn run_poke(args: PokeArgs) -> Result<()> {
         "slop poke: {} ({} ms, {}/{} this cycle)",
         resp.verdict, resp.elapsed_ms, resp.usage.poke_calls, resp.cap
     );
-    for f in &resp.findings {
-        eprintln!("[{}] {}:{} — {}", f.category, f.file, f.line, f.matched);
-    }
+    // Per-line `[category] file:line — match` dumps used to print here.
+    // Removed: they advertise which exact keywords + identifier shapes
+    // the detector keys off. The proposed patch already surfaces every
+    // flagged line in context, so the reviewer sees what changed without
+    // a recipe for circumventing the catalog.
     save_plan(&resp)?;
     // Print the server-rendered patch on stdout so the user sees the
     // exact changes `slop apply` would mutate, AND so they can
