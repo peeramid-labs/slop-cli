@@ -135,11 +135,68 @@ pub fn poke(cfg: &SavedConfig, project: Option<&str>, patch: &str) -> Result<Pok
     let resp = signed_request(cfg, "POST", "/api/v1/poke", &json)?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
+    if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+        let parsed: PaymentRequired =
+            serde_json::from_str(&text).with_context(|| format!("parse 402 body: {text}"))?;
+        return Err(PaymentError(parsed).into());
+    }
     if !status.is_success() {
         bail!("poke failed ({status}): {text}");
     }
     Ok(serde_json::from_str(&text)?)
 }
+
+/// Structured 402 wire shape — emitted by the server when the org's
+/// monthly poke-call cap is reached. Carries the Stripe Checkout URL,
+/// inline pricing (so the CLI can render a confidence-building
+/// onboarding screen without a round-trip), and the usage row that
+/// triggered the lockout.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // reason / slop_org are accepted on the wire for
+                    // future use; allow until we surface them.
+pub struct PaymentRequired {
+    pub error: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub checkout_url: Option<String>,
+    #[serde(default)]
+    pub pricing: Option<PaymentPricing>,
+    #[serde(default)]
+    pub usage: Option<PaymentUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PaymentPricing {
+    pub tier: String,
+    pub currency: String,
+    pub base_dollars: u32,
+    pub final_dollars: u32,
+    pub discount_pct: u32,
+    pub period: String,
+    pub poke_calls_cap: u32,
+    pub coupon_applied: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PaymentUsage {
+    pub calls: u32,
+    pub cap: u32,
+    pub period: String,
+    pub slop_org: String,
+}
+
+#[derive(Debug)]
+pub struct PaymentError(pub PaymentRequired);
+
+impl std::fmt::Display for PaymentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.error)
+    }
+}
+
+impl std::error::Error for PaymentError {}
 
 // ── learn ────────────────────────────────────────────────────────
 

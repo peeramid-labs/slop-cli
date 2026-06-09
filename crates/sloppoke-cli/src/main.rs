@@ -7,6 +7,7 @@
 //!   slop billing tier|portal    subscription + usage / Stripe portal
 
 mod api;
+mod payment;
 mod ssh_resolve;
 mod version_check;
 
@@ -491,7 +492,23 @@ fn run_poke(args: PokeArgs) -> Result<()> {
         return Ok(());
     }
 
-    let resp = api::poke(&cfg, args.project.as_deref(), &patch)?;
+    let resp = match api::poke(&cfg, args.project.as_deref(), &patch) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(pe) = e.downcast_ref::<api::PaymentError>() {
+                // Quota cap hit. Render the onboarding screen and, if
+                // the user actually subscribes, replay this exact
+                // request once.
+                let replay = payment::handle_payment_required(&cfg, &pe.0)?;
+                if !replay {
+                    return Ok(());
+                }
+                api::poke(&cfg, args.project.as_deref(), &patch)?
+            } else {
+                return Err(e);
+            }
+        }
+    };
     save_plan(&resp)?;
     // Verdict + quota line lives on stderr so it's visible to
     // interactive users (self-teaching, quota awareness) without
