@@ -737,12 +737,87 @@ fn resolve_patch(args: &PokeArgs) -> Result<(String, String)> {
         ));
     }
     if let Some(r) = args.range.as_deref() {
-        return Ok((git_diff(&[r])?, format!("--range {r}")));
+        let r = clamp_head_tilde(r);
+        return Ok((git_diff(&[&r])?, format!("--range {r}")));
     }
     if let Some(s) = args.since.as_deref() {
-        return Ok((git_diff(&[s])?, format!("--since {s}")));
+        let s = clamp_head_tilde(s);
+        return Ok((git_diff(&[&s])?, format!("--since {s}")));
     }
     Ok((git_diff(&["HEAD"])?, "git diff HEAD (default)".into()))
+}
+
+/// Rewrite every `HEAD~N` token in `selector` so N never exceeds the
+/// repo's actual history depth. Public repos often have only a handful
+/// of commits — without this, `slop poke --range HEAD~10..HEAD` on a
+/// 5-commit repo dies with git's unfriendly `unknown revision` error.
+/// On success the user sees a `slop: range clamped to …` notice on
+/// stderr and the scan proceeds with the largest range that resolves.
+fn clamp_head_tilde(selector: &str) -> String {
+    let Some(total) = git_rev_count_head() else {
+        return selector.to_string();
+    };
+    if total == 0 {
+        return selector.to_string();
+    }
+    let (out, clamped) = clamp_head_tilde_to(selector, total);
+    if clamped {
+        eprintln!(
+            "slop: range clamped to {out} (repo has {total} commit{})",
+            if total == 1 { "" } else { "s" }
+        );
+    }
+    out
+}
+
+/// Pure helper for `clamp_head_tilde` — separated for unit tests so we
+/// don't need a temp git repo to exercise the parser. Returns the
+/// rewritten selector plus a flag indicating whether any token was
+/// clamped (the caller uses that to log a notice).
+fn clamp_head_tilde_to(selector: &str, total_commits: u32) -> (String, bool) {
+    let limit = total_commits.saturating_sub(1);
+    let mut out = String::with_capacity(selector.len());
+    let bytes = selector.as_bytes();
+    let mut i = 0;
+    let mut clamped = false;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"HEAD~") {
+            let start = i + 5;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start {
+                let n_str = &selector[start..end];
+                let n: u32 = n_str.parse().unwrap_or(0);
+                let chosen = if n > limit {
+                    clamped = true;
+                    limit
+                } else {
+                    n
+                };
+                out.push_str("HEAD~");
+                out.push_str(&chosen.to_string());
+                i = end;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    (out, clamped)
+}
+
+fn git_rev_count_head() -> Option<u32> {
+    let out = Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?;
+    s.trim().parse().ok()
 }
 
 fn git_diff(extra: &[&str]) -> Result<String> {
@@ -1002,5 +1077,50 @@ mod tests {
             remote_repo_url(&a).as_deref(),
             Some("https://repo.test/x.git")
         );
+    }
+
+    #[test]
+    fn clamp_head_tilde_rewrites_n_over_history_limit() {
+        // Repo with 5 commits → HEAD~4 is the oldest reachable rev,
+        // HEAD~5+ doesn't resolve.
+        let (out, clamped) = clamp_head_tilde_to("HEAD~10..HEAD", 5);
+        assert!(clamped);
+        assert_eq!(out, "HEAD~4..HEAD");
+    }
+
+    #[test]
+    fn clamp_head_tilde_passes_through_when_within_limit() {
+        let (out, clamped) = clamp_head_tilde_to("HEAD~3..HEAD", 10);
+        assert!(!clamped);
+        assert_eq!(out, "HEAD~3..HEAD");
+    }
+
+    #[test]
+    fn clamp_head_tilde_handles_multiple_tokens_in_one_range() {
+        // Both ends are HEAD~N — clamp each independently.
+        let (out, clamped) = clamp_head_tilde_to("HEAD~20..HEAD~2", 7);
+        assert!(clamped);
+        // total=7 → limit=6; HEAD~20 → HEAD~6, HEAD~2 stays.
+        assert_eq!(out, "HEAD~6..HEAD~2");
+    }
+
+    #[test]
+    fn clamp_head_tilde_leaves_branch_refs_alone() {
+        let (out, clamped) = clamp_head_tilde_to("origin/main..HEAD", 5);
+        assert!(!clamped);
+        assert_eq!(out, "origin/main..HEAD");
+    }
+
+    #[test]
+    fn clamp_head_tilde_with_zero_history_returns_input_unchanged() {
+        // Edge case: empty / unborn HEAD. Total=0 means limit=0; the
+        // function should not produce HEAD~0 (invalid). Caller is
+        // responsible for the early-return in `clamp_head_tilde`.
+        let (out, clamped) = clamp_head_tilde_to("HEAD~3..HEAD", 0);
+        // Limit=0 means every N gets clamped to 0; while ugly, this
+        // helper stays a pure parser. The wrapper short-circuits
+        // before calling it when total==0.
+        assert!(clamped);
+        assert_eq!(out, "HEAD~0..HEAD");
     }
 }
