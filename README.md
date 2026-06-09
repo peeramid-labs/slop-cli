@@ -32,6 +32,23 @@ slop poke | git apply --unidiff-zero     # apply directly
 slop poke | delta                        # view in a pager
 ```
 
+## How do we characterize slop?
+
+Slop is what writing-by-suggestion leaves in source. Three flavours,
+easier to feel than to define:
+
+- **Wordy nothing** — comments that restate the next line, names
+  that say less than nothing, prose that drifts.
+- **Defensive theatre** — guards for impossible cases, empty
+  catches, retries with no upstream, asserts that can't fire.
+- **Unfinished work shipped** — placeholder brackets, untested
+  branches, stub markers, AI-authorship trailers committed instead
+  of staying in metadata.
+
+We don't publish the catalog, and it isn't static. Every `slop
+learn "…"` you submit calibrates the engine for your account; the
+set firing on your repo on day 30 isn't the set firing today.
+
 ## What it does
 
 slop sweeps your diff through a blazing-fast machine-learning engine
