@@ -372,7 +372,52 @@ fn run_login(args: LoginArgs) -> Result<()> {
         },
         resp.fingerprint
     );
+    maybe_offer_hook_install();
     Ok(())
+}
+
+/// After a successful `slop login`, ask the user whether they want
+/// the global git pre-commit hook installed. Only fires on an
+/// interactive TTY — never blocks scripts or CI. Skips entirely when
+/// the global hook is already present so re-logins don't repeat the
+/// prompt.
+fn maybe_offer_hook_install() {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return;
+    }
+    if std::env::var_os("SLOP_NO_HOOK_PROMPT").is_some() {
+        return;
+    }
+    let Ok(cfg_dir) = api::config_dir() else {
+        return;
+    };
+    let hook_path = cfg_dir.join("git-hooks").join("pre-commit");
+    if hook_path.exists() {
+        return;
+    }
+    eprintln!();
+    eprintln!("slop: install a global git pre-commit hook so `slop poke --staged` runs");
+    eprintln!(
+        "      automatically on every commit? [Y/n] (or run `slop install-hook --global` later)"
+    );
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return;
+    }
+    let answer = line.trim().to_ascii_lowercase();
+    if answer == "n" || answer == "no" {
+        eprintln!("slop: skipped. You can install it later with `slop install-hook --global`.");
+        return;
+    }
+    if let Err(e) = run_install_hook(InstallHookArgs {
+        global: true,
+        force: false,
+    }) {
+        eprintln!(
+            "slop: hook install failed ({e}). You can retry with `slop install-hook --global`."
+        );
+    }
 }
 
 fn default_pubkey_path() -> PathBuf {
