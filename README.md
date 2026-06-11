@@ -96,6 +96,20 @@ Needs rust `1.86+`. One binary, no runtime daemons, no native deps
 beyond `ssh-keygen` for request signing. `cargo install` places `slop`
 in `~/.cargo/bin/` — make sure that's on your `$PATH`.
 
+### Claude Code plugin
+
+Two-step install in any Claude Code session:
+
+```text
+/plugin marketplace add github.com/peeramid-labs/sloppoke
+/plugin install sloppoke@peeramid-labs
+```
+
+Ships `/slop:poke`, `/slop:apply`, `/slop:learn` slash commands plus
+matching skills, so Claude Code calls the CLI on its own before
+committing. Requires `slop` on PATH (Homebrew or source install above)
+and `slop login` once.
+
 ## Get started
 
 ```
@@ -185,20 +199,6 @@ broad, swap in `HEAD~1..HEAD` (last commit only) or a specific tag.
 
 `/slop` is bundled as a Claude skill in `skills/slop.md` — wires the
 CLI into your agent so it pokes before every commit.
-
-## Claude Code plugin
-
-Two-step install in any Claude Code session:
-
-```text
-/plugin marketplace add github.com/peeramid-labs/sloppoke
-/plugin install sloppoke@peeramid-labs
-```
-
-Ships `/slop:poke`, `/slop:apply`, `/slop:learn` slash commands plus
-matching skills, so Claude Code calls the CLI on its own before
-committing. Requires `slop` on PATH (see [Install](#install)) and
-`slop login` once.
 
 ## License
 
