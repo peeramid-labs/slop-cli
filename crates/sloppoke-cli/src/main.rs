@@ -25,8 +25,14 @@ const DEFAULT_SERVER: &str = "https://sloppoke.me";
 const CACHED_PLAN: &str = ".slop/last-poke.json";
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Blazing-fast AI-slop firewall.")]
+#[command(name = "slop", version, about = "Blazing-fast AI-slop firewall.", disable_version_flag = true)]
 struct Cli {
+    /// Print version and exit. Accepts `-v` lowercase, `-V` uppercase,
+    /// and `--version` long-form so muscle memory from every other
+    /// CLI in the ecosystem just works.
+    #[arg(short = 'v', short_alias = 'V', long = "version", action = clap::ArgAction::Version)]
+    version: (),
+
     #[command(subcommand)]
     mode: Mode,
 }
