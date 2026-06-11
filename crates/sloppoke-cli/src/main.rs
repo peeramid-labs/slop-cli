@@ -46,6 +46,24 @@ enum Mode {
     /// Subscription + usage commands.
     #[command(subcommand)]
     Billing(BillingCmd),
+    /// Install a git pre-commit hook that runs `slop poke --staged`
+    /// and blocks the commit on SLOP. Default scope is the current
+    /// repo; `--global` installs to the user's git hooks path so
+    /// every future repo inherits the gate.
+    InstallHook(InstallHookArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+struct InstallHookArgs {
+    /// Install at `~/.config/slop/git-hooks/pre-commit` and point
+    /// `git config --global core.hooksPath` at that directory so the
+    /// hook fires in every repo. Without `--global`, the hook lands
+    /// in the current repo's `.git/hooks/pre-commit` only.
+    #[arg(long)]
+    global: bool,
+    /// Overwrite an existing pre-commit hook without prompting.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -167,7 +185,112 @@ fn run(cli: Cli) -> Result<()> {
         Mode::Apply(a) => run_apply(a),
         Mode::Learn(a) => run_learn(a),
         Mode::Billing(c) => run_billing(c),
+        Mode::InstallHook(a) => run_install_hook(a),
     }
+}
+
+const HOOK_SCRIPT: &str = r##"#!/usr/bin/env sh
+# Installed by `slop install-hook`. Blocks `git commit` when sloppoke
+# flags slop in the staged diff. Bypass once with `git commit --no-verify`.
+set -e
+
+if ! command -v slop >/dev/null 2>&1; then
+  echo "slop: pre-commit hook installed but the 'slop' binary is not on PATH; skipping." >&2
+  exit 0
+fi
+
+# Nothing staged → nothing to scan.
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+set +e
+output=$(slop poke --staged 2>&1)
+status=$?
+set -e
+
+if [ "$status" -ne 0 ]; then
+  printf '%s\n' "$output" >&2
+  echo "slop: scan errored ($status); commit blocked. Re-run or 'git commit --no-verify'." >&2
+  exit 1
+fi
+
+# slop poke prints the unified-diff patch to stdout on SLOP, empty on LGTM.
+if [ -n "$output" ]; then
+  echo "$output"
+  echo "" >&2
+  echo "slop: SLOP found. Run 'slop apply --no-commit' then re-commit, or 'git commit --no-verify' to bypass." >&2
+  exit 1
+fi
+
+exit 0
+"##;
+
+fn run_install_hook(args: InstallHookArgs) -> Result<()> {
+    let target_path = if args.global {
+        let dir = api::config_dir()?.join("git-hooks");
+        fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        let status = Command::new("git")
+            .args(["config", "--global", "core.hooksPath"])
+            .arg(&dir)
+            .status()
+            .context("set git config --global core.hooksPath")?;
+        if !status.success() {
+            bail!("git config --global core.hooksPath returned non-zero");
+        }
+        dir.join("pre-commit")
+    } else {
+        let out = Command::new("git")
+            .args(["rev-parse", "--git-path", "hooks"])
+            .output()
+            .context("git rev-parse --git-path hooks (are you in a git repo?)")?;
+        if !out.status.success() {
+            bail!(
+                "git rev-parse failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let hooks_dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        fs::create_dir_all(&hooks_dir)
+            .with_context(|| format!("create {}", hooks_dir.display()))?;
+        hooks_dir.join("pre-commit")
+    };
+
+    if target_path.exists() && !args.force {
+        let body = fs::read_to_string(&target_path).unwrap_or_default();
+        if body.contains("Installed by `slop install-hook`") {
+            eprintln!(
+                "slop: pre-commit hook already installed at {} — nothing to do.",
+                target_path.display()
+            );
+            return Ok(());
+        }
+        bail!(
+            "an unrelated pre-commit hook already lives at {}; rerun with --force to overwrite.",
+            target_path.display()
+        );
+    }
+
+    fs::write(&target_path, HOOK_SCRIPT)
+        .with_context(|| format!("write {}", target_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&target_path)
+            .with_context(|| format!("stat {}", target_path.display()))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&target_path, perms)
+            .with_context(|| format!("chmod 0755 {}", target_path.display()))?;
+    }
+
+    let scope = if args.global { "global" } else { "repo" };
+    eprintln!(
+        "slop: installed {scope} pre-commit hook at {}",
+        target_path.display()
+    );
+    eprintln!("slop: every `git commit` now runs `slop poke --staged` first. Bypass once with `git commit --no-verify`.");
+    Ok(())
 }
 
 // ── login ────────────────────────────────────────────────────────
