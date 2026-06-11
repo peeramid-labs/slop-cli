@@ -13,8 +13,13 @@ Also bundles the canonical `slop.md` skill so the same "what does the verdict me
 ## Install
 
 ```
-/plugin install github.com/peeramid-labs/sloppoke
+/plugin marketplace add github.com/peeramid-labs/sloppoke
+/plugin install sloppoke@Peeramid\ Labs
 ```
+
+The first command registers this repo as a marketplace (it ships a
+`.claude-plugin/marketplace.json` at root). The second installs the
+`sloppoke` plugin from it.
 
 The plugin assumes the `slop` binary is already on your `$PATH`. Install it first:
 

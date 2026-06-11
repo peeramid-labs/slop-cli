@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "Peeramid Labs",
+  "description": "Sloppoke + future Peeramid Labs developer tools",
+  "owner": {
+    "name": "Peeramid Labs",
+    "email": "engineering@peeramid.xyz",
+    "url": "https://peeramid.xyz"
+  },
+  "plugins": [
+    {
+      "name": "sloppoke",
+      "source": "./claude-plugin",
+      "description": "Pre-commit AI-slop firewall. /slop:poke, /slop:apply, /slop:learn wrap the slop CLI.",
+      "version": "0.1.0",
+      "homepage": "https://sloppoke.me",
+      "tags": ["ai", "slop", "lint", "pre-commit"]
+    }
+  ]
+}
