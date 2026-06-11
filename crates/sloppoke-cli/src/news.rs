@@ -228,3 +228,54 @@ pub fn run(server_url: &str, all: bool, ack: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Single-test serialization: news tests mutate the process-global
+    /// `SLOP_CONFIG_DIR` env var, so they can't run in parallel.
+    /// Every assertion lives inside this one #[test] to dodge races.
+    #[test]
+    fn news_cache_and_seen_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("SLOP_CONFIG_DIR", tmp.path());
+
+        // 1. seen list defaults to empty when file missing.
+        let empty = read_seen();
+        assert!(empty.seen.is_empty());
+
+        // 2. write + read seen roundtrips.
+        let s = SeenList {
+            seen: vec!["a".into(), "b".into()],
+        };
+        write_seen(&s);
+        let back = read_seen();
+        assert_eq!(back.seen, vec!["a".to_string(), "b".to_string()]);
+
+        // 3. cache roundtrips.
+        let cache = NewsCache {
+            fetched_at: 1_780_000_000,
+            entries: vec![NewsEntry {
+                id: "x".into(),
+                published_at: "2026-06-11T00:00:00Z".into(),
+                level: "info".into(),
+                title: "t".into(),
+                body: "b".into(),
+            }],
+        };
+        write_cache(&cache).unwrap();
+        let read_back = read_cache().unwrap();
+        assert_eq!(read_back.fetched_at, 1_780_000_000);
+        assert_eq!(read_back.entries.len(), 1);
+        assert_eq!(read_back.entries[0].id, "x");
+
+        // 4. fetch_news with a fresh cache + unreachable server
+        //    returns the cached entries (graceful offline mode).
+        let offline = fetch_news("http://127.0.0.1:1");
+        assert_eq!(offline.len(), 1);
+        assert_eq!(offline[0].id, "x");
+
+        std::env::remove_var("SLOP_CONFIG_DIR");
+    }
+}

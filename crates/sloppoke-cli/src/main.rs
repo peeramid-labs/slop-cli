@@ -1344,4 +1344,28 @@ mod tests {
         assert!(clamped);
         assert_eq!(out, "HEAD~0..HEAD");
     }
+
+    #[test]
+    fn hook_script_has_marker_for_overwrite_detection() {
+        // run_install_hook reads existing files looking for our
+        // marker string before overwriting; if the script body no
+        // longer contains it we'd silently clobber user-authored
+        // hooks. Regression guard so the marker can't drift out.
+        assert!(
+            HOOK_SCRIPT.contains("Installed by `slop install-hook`"),
+            "marker missing from HOOK_SCRIPT; overwrite detection breaks"
+        );
+        assert!(
+            HOOK_SCRIPT.contains("slop poke --staged"),
+            "hook body must run `slop poke --staged`"
+        );
+        assert!(
+            HOOK_SCRIPT.contains("--no-verify"),
+            "hook should document the bypass flag in its output"
+        );
+        assert!(
+            HOOK_SCRIPT.starts_with("#!/usr/bin/env sh"),
+            "hook must declare a POSIX-shell shebang"
+        );
+    }
 }
