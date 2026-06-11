@@ -1,4 +1,42 @@
 
+
+## [0.7.0] - 2026-06-11
+
+### 🚀 Features
+
+- *(cli)* Clamp HEAD~N to repo history before git diff — friendlier UX on small public repos
+- *(cli)* Pleasant 402 onboarding — auto-open Stripe, inline pricing, post-purchase polling + replay
+- *(claude-plugin)* Scaffold sloppoke Claude Code plugin
+- *(claude-plugin)* Add marketplace.json so /plugin marketplace add resolves the repo
+- *(cli)* Slop install-hook subcommand for pre-commit gate
+- *(cli)* Slop news + post-command auto-ping for product announcements
+- *(cli)* Offer global pre-commit hook install during slop login
+- *(cli)* Slop learn auto-attaches last poke (id + patch) as context
+- *(plugin)* V0.2 — PreToolUse hook auto-gates every git commit
+
+### 🐛 Bug Fixes
+
+- *(cli)* Count hunks from patch text, not the removed cleanup_actions vec
+- *(cli)* Poke prints the patch and nothing else
+- *(claude-plugin)* Rename marketplace to kebab-case 'peeramid-labs'
+- *(docs)* Plugin marketplace add uses org/repo form not full URL
+
+### 📚 Documentation
+
+- *(readme,skill)* Cover --gh/--repo, naked-stdout output model, piping idioms
+- *(readme)* Add CI workflow snippet for sloppoke in github actions
+- *(readme)* Add 'how do we characterize slop' section — magic version
+- *(readme)* Add Claude Code plugin install (marketplace add + install)
+- *(readme)* Move Claude Code plugin install up under Install section
+
+### 🧪 Testing
+
+- *(cli)* Unit coverage for news cache roundtrip + install-hook script marker
+
+### ◀️ Revert
+
+- *(cli)* Restore verdict + apply hint on stderr — strip went too far
+
 ## [0.6.0] - 2026-06-08
 
 ### 🚀 Features
