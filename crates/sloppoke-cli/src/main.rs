@@ -7,6 +7,7 @@
 //!   slop billing tier|portal    subscription + usage / Stripe portal
 
 mod api;
+mod news;
 mod payment;
 mod ssh_resolve;
 mod version_check;
@@ -51,6 +52,21 @@ enum Mode {
     /// repo; `--global` installs to the user's git hooks path so
     /// every future repo inherits the gate.
     InstallHook(InstallHookArgs),
+    /// Show product announcements. By default prints unread entries
+    /// and marks them seen. `--all` replays the full back catalog.
+    News(NewsArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+struct NewsArgs {
+    /// Show every entry the server has ever published, not just the
+    /// ones the user hasn't seen yet.
+    #[arg(long)]
+    all: bool,
+    /// Mark every cached entry as read without printing anything.
+    /// Use to silence a backlog without scrolling through it.
+    #[arg(long)]
+    ack: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -175,7 +191,26 @@ fn main() {
     // whatever they came to see, never replaces it. All errors
     // (offline, rate-limited, parse failure) are swallowed inside.
     version_check::notify_if_outdated();
+    // Surface one unseen news entry from the server. Same
+    // post-output position as version_check; also fully fail-silent.
+    // Only on success — failed commands shouldn't bury their error
+    // under product chatter.
+    if rc == 0 {
+        news::ping_one_unseen(&news_server_url());
+    }
     std::process::exit(rc);
+}
+
+/// Server URL for the news endpoint. The login subcommand carries a
+/// `--server` flag; everything else just needs a URL. Look at the
+/// saved config first (so users who pointed `slop login` at a custom
+/// host get their news from there), fall back to SLOPPOKE_SERVER env,
+/// then to the production default.
+fn news_server_url() -> String {
+    if let Ok(cfg) = api::load_config() {
+        return cfg.server_url;
+    }
+    std::env::var("SLOPPOKE_SERVER").unwrap_or_else(|_| DEFAULT_SERVER.to_string())
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -186,6 +221,7 @@ fn run(cli: Cli) -> Result<()> {
         Mode::Learn(a) => run_learn(a),
         Mode::Billing(c) => run_billing(c),
         Mode::InstallHook(a) => run_install_hook(a),
+        Mode::News(a) => news::run(&news_server_url(), a.all, a.ack),
     }
 }
 
