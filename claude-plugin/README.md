@@ -13,7 +13,7 @@ Also bundles the canonical `slop.md` skill so the same "what does the verdict me
 ## Install
 
 ```
-/plugin marketplace add github.com/peeramid-labs/sloppoke
+/plugin marketplace add peeramid-labs/sloppoke
 /plugin install sloppoke@peeramid-labs
 ```
 

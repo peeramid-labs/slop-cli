@@ -101,7 +101,7 @@ in `~/.cargo/bin/` — make sure that's on your `$PATH`.
 Two-step install in any Claude Code session:
 
 ```text
-/plugin marketplace add github.com/peeramid-labs/sloppoke
+/plugin marketplace add peeramid-labs/sloppoke
 /plugin install sloppoke@peeramid-labs
 ```
 
