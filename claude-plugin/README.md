@@ -10,6 +10,8 @@ Adds three slash commands to Claude Code that wrap the `slop` CLI:
 
 Also bundles the canonical `slop.md` skill so the same "what does the verdict mean" context is available regardless of which command the user invokes.
 
+Plus a **PreToolUse hook** (`hooks/pre-commit-poke.sh`) that intercepts every `Bash` tool call Claude makes, lets non-commit commands through, and runs `slop poke --staged` before any `git commit*`. Non-LGTM verdicts surface to Claude with the suggested patch — the model can call `/slop:apply` and retry the commit, or you can bypass once with `SLOP_SKIP_HOOK=1 git commit ...`.
+
 ## Install
 
 ```
@@ -34,7 +36,15 @@ The skill (`skills/slop.md`) is portable across any agent that reads a skill dir
 
 - Slash-command shortcuts for the common verbs
 - Plugin-manager update lifecycle (no `curl | sh` to refresh)
-- Future hooks (pre-commit `slop poke` gate) and MCP exposure of the public-score endpoint
+- PreToolUse hook auto-gating every `git commit` Claude attempts
+- Future: MCP exposure of the public-score endpoint, `slop doctor`
+
+To pull a new plugin version after an update lands:
+
+```
+/plugin marketplace update peeramid-labs
+/plugin install sloppoke@peeramid-labs
+```
 
 Use whichever fits your setup. The skill alone works fine — the plugin just adds shortcuts.
 

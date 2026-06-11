@@ -11,8 +11,8 @@
     {
       "name": "sloppoke",
       "source": "./claude-plugin",
-      "description": "Pre-commit AI-slop firewall. /slop:poke, /slop:apply, /slop:learn wrap the slop CLI.",
-      "version": "0.1.0",
+      "description": "Pre-commit AI-slop firewall. /slop:poke, /slop:apply, /slop:learn wrap the slop CLI. Auto-gates every `git commit` via PreToolUse hook.",
+      "version": "0.2.0",
       "homepage": "https://sloppoke.me",
       "tags": ["ai", "slop", "lint", "pre-commit"]
     }
