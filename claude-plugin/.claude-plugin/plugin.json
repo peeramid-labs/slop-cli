@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "sloppoke",
+  "version": "0.1.0",
+  "description": "Pre-commit AI-slop firewall. Sub-10ms verdict per patch. Splices /slop:poke, /slop:apply, /slop:learn into Claude Code.",
+  "author": {
+    "name": "Peeramid Labs",
+    "email": "engineering@peeramid.xyz",
+    "url": "https://peeramid.xyz"
+  },
+  "homepage": "https://sloppoke.me",
+  "repository": "https://github.com/peeramid-labs/sloppoke",
+  "license": "MIT",
+  "keywords": ["ai", "slop", "lint", "pre-commit", "code-quality"]
+}
