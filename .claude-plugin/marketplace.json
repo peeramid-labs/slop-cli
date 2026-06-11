@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
-  "name": "Peeramid Labs",
+  "name": "peeramid-labs",
   "description": "Sloppoke + future Peeramid Labs developer tools",
   "owner": {
     "name": "Peeramid Labs",

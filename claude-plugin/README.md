@@ -14,7 +14,7 @@ Also bundles the canonical `slop.md` skill so the same "what does the verdict me
 
 ```
 /plugin marketplace add github.com/peeramid-labs/sloppoke
-/plugin install sloppoke@Peeramid\ Labs
+/plugin install sloppoke@peeramid-labs
 ```
 
 The first command registers this repo as a marketplace (it ships a
