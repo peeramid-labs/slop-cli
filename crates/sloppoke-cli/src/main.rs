@@ -154,8 +154,17 @@ struct LearnArgs {
     #[arg(long)]
     project: Option<String>,
     /// Optional anchoring context (file path, code excerpt, error).
+    /// When omitted, the CLI auto-attaches the most recent
+    /// `.slop/last-poke.json` (poke id + patch) so the server can
+    /// tie the feedback to a specific scan without the user
+    /// copy-pasting. Pass `--no-attach` to suppress.
     #[arg(long)]
     context: Option<String>,
+    /// Do NOT auto-attach the last poke's patch + id as context.
+    /// Useful for generic project-wide feedback that doesn't
+    /// reference a specific scan.
+    #[arg(long)]
+    no_attach: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -1135,17 +1144,61 @@ fn apply_via_git(plan: &CachedPlan, args: ApplyArgs) -> Result<()> {
 fn run_learn(args: LearnArgs) -> Result<()> {
     let cfg = api::load_config()
         .context("`slop learn` needs a server config. Run `slop login` first.")?;
-    let resp = api::learn(
-        &cfg,
-        &args.feedback,
-        args.context.as_deref(),
-        args.project.as_deref(),
-    )?;
+    // Auto-attach the cached poke plan when the caller didn't pass
+    // their own --context. Saves a copy-paste step and gives the RL
+    // loop a concrete (poke_id, patch) pair to join the feedback
+    // against instead of free-floating prose. Suppressed by --no-attach.
+    let auto_context = if args.context.is_none() && !args.no_attach {
+        attached_context_from_cached_plan()
+    } else {
+        None
+    };
+    let context = args.context.as_deref().or(auto_context.as_deref());
+    let resp = api::learn(&cfg, &args.feedback, context, args.project.as_deref())?;
     eprintln!(
-        "slop learn: queued {} ({}/{}) — {} bytes",
-        resp.entry_id, resp.queued, resp.monthly_cap, resp.bytes
+        "slop learn: queued {} ({}/{}) — {} bytes{}",
+        resp.entry_id,
+        resp.queued,
+        resp.monthly_cap,
+        resp.bytes,
+        if auto_context.is_some() {
+            " (attached last poke)"
+        } else {
+            ""
+        }
     );
     Ok(())
+}
+
+/// Read `.slop/last-poke.json` and format a short context string the
+/// server can store next to the feedback row. Includes poke_id (so
+/// the offline RL loop can join), verdict, and a truncated patch so
+/// the reviewer sees what triggered the feedback without unbounded
+/// payload growth. Returns None when no plan is cached.
+fn load_plan() -> Result<CachedPlan> {
+    let raw = fs::read_to_string(CACHED_PLAN).with_context(|| format!("read {CACHED_PLAN}"))?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+fn attached_context_from_cached_plan() -> Option<String> {
+    let plan = load_plan().ok()?;
+    let mut out = String::new();
+    out.push_str(&format!("poke_id: {}\n", plan.poke_id));
+    out.push_str(&format!("verdict: {}\n", plan.verdict));
+    if !plan.patch.trim().is_empty() {
+        out.push_str("---\n");
+        // 8KB cap leaves room under the server's 1MB learn body
+        // limit even with a long feedback body alongside.
+        let max = 8 * 1024usize;
+        if plan.patch.len() > max {
+            let cut = plan.patch[..max].rfind('\n').unwrap_or(max);
+            out.push_str(&plan.patch[..cut]);
+            out.push_str("\n... (patch truncated; see poke_id for the full row)");
+        } else {
+            out.push_str(&plan.patch);
+        }
+    }
+    Some(out)
 }
 
 // ── billing ──────────────────────────────────────────────────────
