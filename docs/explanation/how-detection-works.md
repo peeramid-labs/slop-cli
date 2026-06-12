@@ -78,10 +78,10 @@ What this means for you:
   because…"`) feeds the deliberation loop.
 - The loop processes feedback out-of-band — no synchronous latency at
   the commit boundary.
-- The model panel that runs deliberation is what powers the rest of
-  Peeramid Labs' multi-agent products. Your feedback gets the full
-  orchestration backend; you only ever hit the fast scanner from the
-  CLI.
+- Deliberation runs on **our own model fleet**, not third-party LLM
+  APIs. Your patch text never leaves our infrastructure to a vendor.
+- After 24 h only anonymized, generalized detection patterns survive
+  server-side, scoped to your account.
 
 ## Why this split is the right one
 

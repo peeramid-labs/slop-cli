@@ -4,6 +4,24 @@ Sloppoke processes your patch text to score it and stores parts of it
 to improve the engine. This page explains what flows where, what we
 retain, and what your identity is.
 
+## Does the CLI work without the server?
+
+Today: no. The CLI is a thin client — it POSTs your diff over HTTPS
+and the catalog match runs server-side. Without the API there is no
+verdict. The algorithm is proprietary; **on-prem and confidential-
+compute (TEE) deployments are available for Enterprise** —
+[contact us](mailto:engineering@peeramid.xyz) if either fits.
+
+## Data policy at a glance
+
+- Patches are retained **24 h** for the learning loop.
+- Processing runs on **our own model fleet** (not third-party LLM
+  APIs) in an async deliberation loop that does not affect `slop poke`
+  latency.
+- After 24 h only **anonymized, generalized detection patterns**
+  survive — server-side, scoped to your account.
+- **EU residency** by default. Per-account purge on request.
+
 ## Identity = SSH key fingerprint
 
 The `slop login` flow asks `ssh-agent` (or reads `~/.ssh/id_*.pub`)
