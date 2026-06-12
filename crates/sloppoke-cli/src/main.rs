@@ -275,12 +275,14 @@ if git diff --cached --quiet; then
 fi
 
 set +e
-output=$(slop poke --staged 2>&1)
+# Drop stderr (the 'slop poke: LGTM/SLOP — N hits' verdict line
+# lives there). stdout carries the signal: empty = LGTM,
+# non-empty = SLOP patch we should surface to the user.
+output=$(slop poke --staged 2>/dev/null)
 status=$?
 set -e
 
 if [ "$status" -ne 0 ]; then
-  printf '%s\n' "$output" >&2
   echo "slop: scan errored ($status); commit blocked. Re-run or 'git commit --no-verify'." >&2
   exit 1
 fi
