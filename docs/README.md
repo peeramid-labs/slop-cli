@@ -39,6 +39,7 @@ predictable.
 For users who want to know *why*, not just *how*.
 
 - [What "AI slop" actually means](explanation/what-is-slop.md)
+- [Why Sloppoke exists: LLMs are lossy compression](explanation/llms-are-lossy-compression.md)
 - [Why pre-commit is the right boundary](explanation/why-pre-commit.md)
 - [How detection works under the hood](explanation/how-detection-works.md)
 - [Privacy + identity model](explanation/privacy-and-identity.md)
