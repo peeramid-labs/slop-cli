@@ -61,10 +61,10 @@ CI catches what slipped past the local gate. It doesn't replace it.
 ## What gets sacrificed
 
 Pre-commit gating means a milliseconds-fast check on every commit. We
-can't run a 10-second LLM call there. The detector is a regex + AST
-engine that returns under 10 ms on a typical patch. That constraint
-shapes the catalog: every entry is mechanically detectable from the
-diff alone, no model in the loop.
+can't run a 10-second LLM call there. The detector is a deterministic
+pattern engine that returns under 10 ms on a typical patch. That
+constraint shapes the catalog: every entry is mechanically detectable
+from the diff alone, no model in the request path.
 
 The downside: there are slop classes that need actual reasoning to
 catch (e.g. "this entire function duplicates one ten files away"). For

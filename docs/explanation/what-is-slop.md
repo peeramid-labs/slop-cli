@@ -48,9 +48,9 @@ months later as "the codebase feels bloated."
 
 Anything in the [catalog reference](../reference/catalog.md). Every
 category there has been distilled from real diffs across real
-LLM-assisted repos. The catalog is regex-driven + AST-aware where
-syntax matters (Rust `#[cfg(test)]` boundaries, Python test-file
-conventions, TypeScript branch counting).
+LLM-assisted repos. The catalog is language-aware where syntax matters
+(Rust `#[cfg(test)]` boundaries, Python test-file conventions,
+TypeScript branch counting).
 
 The list grows. New entries land as we see them in the wild.
 

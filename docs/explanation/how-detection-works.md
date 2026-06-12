@@ -1,9 +1,9 @@
 # How detection works under the hood
 
-People assume an LLM-based code analyzer must call an LLM. Sloppoke
-deliberately doesn't, on the hot path. The fast scanner is a
-deterministic regex + AST engine. The "learning" lives in a slow async
-loop behind it.
+Sloppoke uses a two-loop architecture. A deterministic pattern
+engine in front of your `git commit`, and a multi-model deliberation
+pipeline behind it that continuously sharpens the catalog the engine
+runs against.
 
 ## The fast path
 
@@ -11,15 +11,10 @@ loop behind it.
 your patch ──► slop CLI ──► HTTPS POST /api/v1/poke
                             │
                             ▼
-                   LocalEngine in the server
+                   curated category catalog
+                   (~50 categories, language-aware)
                             │
-                ┌───────────┴───────────────┐
-                ▼                           ▼
-         compiled regex                AST visitors
-         categories                    (per-language)
-                │                           │
-                └─────────┬─────────────────┘
-                          ▼
+                            ▼
               hit list with category +
               suggested cleanup
 ```
@@ -29,47 +24,49 @@ Steps:
 1. The CLI reads your patch (`git diff --staged`, a range, a file).
 2. It signs the request with your SSH key and POSTs it to
    `/api/v1/poke`.
-3. The server loads a pre-compiled corpus of ~50 categories. Each
-   category is a regex + a fixability declaration.
-4. For each added line of the diff, every regex runs. AST visitors
-   walk per-language modules for the structural categories that
-   pure-text patterns can't reach (branch counting, doc-comment
-   detection, `#[cfg(test)]` boundaries).
+3. The server matches the patch against a curated category catalog
+   that's been distilled from real LLM-assisted diffs across many
+   languages and ecosystems.
+4. Language-aware analysis walks structural categories that flat text
+   matching can't reach: branch coverage, doc-comment presence,
+   `#[cfg(test)]` boundaries, framework idioms.
 5. Hits are deduplicated, scored, and returned with a `cleanup_actions`
    array.
 
-Sub-10 ms verdict per typical patch. No LLM. No model load. No GPU.
+Sub-10 ms verdict per typical patch. No model in the request path,
+no GPU, no per-commit cost. Same patch → same verdict, every time —
+the verdict is reproducible, not generative.
 
 ## What's in the catalog
 
 See the [catalog reference](../reference/catalog.md) for the full list.
 Five buckets cover most of the surface:
 
-- Language-agnostic text patterns (self-congratulatory verbs,
+- Language-agnostic LLM tells (self-congratulatory verbs,
   defensive crud, narrative comments)
-- Language-specific structural rules (Python `bare_except`, Rust
+- Language-specific structural traps (Python `bare_except`, Rust
   `unwrap` outside tests, TS `as unknown as`)
 - SQL anti-patterns
-- AST-driven cross-file checks (untested branches)
+- Cross-file structural checks (untested branches)
 - Comment-marker hunters (FIXME / HACK / XXX / TODO)
 
-Every rule has been distilled from real LLM-assisted diffs, not from
+Every category has been distilled from real LLM-assisted diffs, not
 academic taxonomies. The list grows as new patterns surface in the
 wild.
 
-## The slow path — where ML lives
+## The slow path — where the intelligence lives
 
 Detection accuracy improves over time via NSED Orchestrator, an
-asynchronous reinforcement-learning backend.
+asynchronous multi-model deliberation backend.
 
 ```
-your `slop learn` feedback ──► LearnLog (sled tree on the server)
+your `slop learn` feedback ──► LearnLog (server-side, EU-resident)
                                        │
                                        ▼
                           ┌────────────────────────────┐
-                          │ NSED async RL pipeline      │
+                          │ NSED async deliberation     │
                           │ ──────────────────────────  │
-                          │ • multi-model deliberation │
+                          │ • multi-model panel review │
                           │ • category weight tuning   │
                           │ • per-account corpus diffs │
                           └──────────────┬──────────────┘
@@ -82,25 +79,27 @@ your `slop learn` feedback ──► LearnLog (sled tree on the server)
 What this means for you:
 
 - Every false positive you report (`slop learn "the X warning is wrong
-  because…"`) feeds the loop.
-- The loop processes feedback out-of-band — no synchronous latency.
-- The model fleet that runs deliberation is what powers the rest of
-  Peeramid Labs' multi-agent products. You get the benefit of the
-  full orchestration backend, but you only ever hit the fast
-  regex/AST scanner from the CLI.
+  because…"`) feeds the deliberation loop.
+- The loop processes feedback out-of-band — no synchronous latency at
+  the commit boundary.
+- The model panel that runs deliberation is what powers the rest of
+  Peeramid Labs' multi-agent products. Your feedback gets the full
+  orchestration backend; you only ever hit the fast scanner from the
+  CLI.
 
 ## Why this split is the right one
 
-Detection benefits from determinism: same patch → same verdict, every
-time, no temperature. Tuning benefits from ML: surfacing patterns no
-human wrote a regex for yet.
+Detection at the commit boundary needs determinism: same patch → same
+verdict, every time. Tuning needs intelligence: surfacing patterns no
+catalog entry has codified yet.
 
-Mixing them on the hot path would mean an LLM call per commit, which
+Mixing them on the hot path would mean a model call per commit, which
 would:
 
 - Add seconds of latency to every `git commit`
 - Cost real money per commit
 - Make every verdict non-reproducible
 
-Splitting them keeps `slop poke` boring, fast, and free of mystery.
-The intelligence lives in the catalog, not in the request.
+Splitting them keeps `slop poke` boring, fast, and predictable. The
+intelligence lives in the catalog. The catalog learns. You stay on
+the fast path.
