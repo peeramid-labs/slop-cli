@@ -2,6 +2,17 @@
 
 
 
+
+## [0.8.2] - 2026-06-12
+
+### 🐛 Bug Fixes
+
+- *(cli)* Pre-commit hook drops stderr, only inspects stdout
+
+### ⚙️ Miscellaneous Tasks
+
+- *(plugin)* Bump to v0.2.8 to force marketplace reinstall pickup
+
 ## [0.8.1] - 2026-06-12
 
 ### 🐛 Bug Fixes
