@@ -55,6 +55,44 @@ Run `/slop:install-hook` (current repo) or `/slop:install-hook --global`
 (every repo on the machine) when you're ready. See
 [install-pre-commit-hook](install-pre-commit-hook.md) for scope details.
 
+## Why the `TODO(slop):` markers matter
+
+When `slop apply` runs, two things happen:
+
+1. **Safe-delete findings** (slop comments, redundant `console.log`,
+   etc.) are stripped out of the diff.
+2. **Semantic findings** (questionable naming, untested branches,
+   suspicious bounds, redundant guards) get a `// TODO(slop): …`
+   marker spliced above the line. The code itself is left intact.
+
+Those markers are not noise. They are precise (file, line, category)
+hints — the catalog already pattern-matched, the agent just needs to
+act. After every apply, the assistant should:
+
+```sh
+git grep -n "TODO(slop)"
+```
+
+Then triage each hit. Two paths:
+
+- **Fix in this change.** Small, local, in-scope (off-by-one,
+  redundant null check, missing test for a branch you just wrote).
+  Fix it. The TODO line vanishes on the next poke.
+- **File as backlog.** Larger refactor, out-of-scope, cross-file.
+  Add to `.issues/open/TXXX-…md` if the repo uses that convention,
+  or open a real ticket (`gh issue create`, Linear, JIRA, whatever).
+  **Leave the TODO(slop) line in place.** Removing it without either
+  fixing the code or filing a followup loses the signal — and the
+  next poke will splice it back in anyway.
+
+If a marker is genuinely wrong for your codebase, that is what
+`slop learn "<why>"` is for. The catalog gets sharper from
+calibrated feedback, not from stripped markers.
+
+The plugin's prompt already nudges Claude through this triage after
+`/slop:apply`. The flow is: **apply → grep → triage → fix or file →
+poke again**.
+
 ## Bypass for one commit
 
 ```sh

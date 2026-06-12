@@ -79,12 +79,49 @@ Server tiers every finding by safety, the CLI never invents fixes:
 - **Todo** (anything semantically loaded — naming, branches without
   tests, off-by-one bounds, redundant null checks) → a
   `// TODO(slop): …` comment is spliced above the line in the file's
-  native comment syntax. Code is left intact. You decide.
+  native comment syntax. Code is left intact. These markers are
+  **load-bearing signal** — see next section.
 - **Flag-only** (TODO/FIXME placeholders) → surfaced in the verdict
   but no patch change. Nothing to mechanically fix.
 
 If apply's preflight refuses the patch, the working tree is byte-
 identical to its pre-apply state. Re-running is safe.
+
+## TODO(slop) markers are an action queue, not noise
+
+Every `// TODO(slop): …` line that survives `slop apply` is a
+**precise, line-pinned hint** of a real problem slop's catalog
+flagged but did not fix automatically. Treat them as a work queue:
+
+```bash
+git grep -n "TODO(slop)"
+```
+
+Each hit is one of two things:
+
+1. **Fix-now candidate.** Small, local, in-scope for the change the
+   user is making right now (off-by-one, redundant null check,
+   missing test for a fresh branch). Fix it in the same commit. The
+   TODO(slop) line goes away on the next `slop poke`.
+2. **Backlog candidate.** Larger refactor, cross-file work, or
+   touches code outside the user's stated scope. **Do not** silently
+   fix it. **Do not** delete the TODO marker. File it:
+   - Append to `.issues/open/TXXX-<slug>.md` if the project uses
+     the `.issues/` convention (see CONTRIBUTING.md / repo
+     conventions).
+   - Or open a real ticket: `gh issue create …`, Linear, JIRA —
+     whatever this repo already uses.
+   - Then leave the TODO(slop) line in place. Removing it without
+     either fixing the code or filing a followup loses the signal.
+
+The catalog has already done the hard part — pattern-matching at
+sub-10 ms across 50+ categories. The TODO markers convert that
+match into a precise (file, line, category) tuple a coding agent
+can act on immediately. That is the whole point.
+
+Never strip a TODO(slop) marker as part of "cleanup". The poke that
+emitted it will emit it again next time, and `slop learn` is the
+only correct way to say "this one is a false positive."
 
 ## When the model disagrees with a finding
 
