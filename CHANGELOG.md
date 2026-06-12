@@ -1,6 +1,13 @@
 
 
 
+
+## [0.8.1] - 2026-06-12
+
+### 🐛 Bug Fixes
+
+- *(plugin)* V0.2.7 — proper token-walk to detect git commit, not substring match
+
 ## [0.8.0] - 2026-06-12
 
 ### 🚀 Features
