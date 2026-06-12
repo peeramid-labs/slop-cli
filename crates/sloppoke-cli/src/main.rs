@@ -61,6 +61,8 @@ enum Mode {
     /// Show product announcements. By default prints unread entries
     /// and marks them seen. `--all` replays the full back catalog.
     News(NewsArgs),
+    /// Print which hook layers are active (git + Claude Code).
+    Status,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -237,6 +239,7 @@ fn run(cli: Cli) -> Result<()> {
         Mode::Billing(c) => run_billing(c),
         Mode::InstallHook(a) => run_install_hook(a),
         Mode::News(a) => news::run(&news_server_url(), a.all, a.ack),
+        Mode::Status => run_status(),
     }
 }
 
@@ -341,6 +344,115 @@ fn run_install_hook(args: InstallHookArgs) -> Result<()> {
         target_path.display()
     );
     eprintln!("slop: every `git commit` now runs `slop poke --staged` first. Bypass once with `git commit --no-verify`.");
+    print_defense_in_depth_summary();
+    Ok(())
+}
+
+/// Whether the Claude Code plugin's PreToolUse hook script is present
+/// on this machine. Looks for any installed sloppoke plugin version
+/// under `~/.claude/plugins/cache/peeramid-labs/sloppoke/*/hooks/pre-commit-poke.sh`.
+/// False when Claude Code isn't installed or the plugin isn't either.
+fn claude_plugin_hook_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let base = PathBuf::from(home)
+        .join(".claude")
+        .join("plugins")
+        .join("cache")
+        .join("peeramid-labs")
+        .join("sloppoke");
+    let entries = fs::read_dir(&base).ok()?;
+    let mut best: Option<PathBuf> = None;
+    let mut best_label: Option<String> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let hook = path.join("hooks").join("pre-commit-poke.sh");
+        if hook.exists() {
+            let label = entry.file_name().to_string_lossy().to_string();
+            if best_label.as_deref().is_none_or(|b| label.as_str() > b) {
+                best_label = Some(label);
+                best = Some(hook);
+            }
+        }
+    }
+    best
+}
+
+/// True if a `.git/hooks/pre-commit` or the global hooks-path hook
+/// carries the `slop install-hook` marker — i.e. our terminal gate
+/// is wired for the current working tree.
+fn git_hook_installed() -> bool {
+    let out = Command::new("git")
+        .args(["rev-parse", "--git-path", "hooks"])
+        .output();
+    let local = if let Ok(out) = out {
+        if out.status.success() {
+            let path =
+                PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join("pre-commit");
+            if let Ok(body) = fs::read_to_string(&path) {
+                if body.contains("Installed by `slop install-hook`") {
+                    return true;
+                }
+            }
+            Some(path)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let _ = local;
+    if let Ok(dir) = api::config_dir() {
+        let p = dir.join("git-hooks").join("pre-commit");
+        if let Ok(body) = fs::read_to_string(&p) {
+            if body.contains("Installed by `slop install-hook`") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Print the two-layer defense status. Same body the install path
+/// closes with and the `slop status` subcommand emits — single source
+/// of truth so the funnel reads identically wherever the user hits
+/// it.
+fn print_defense_in_depth_summary() {
+    let git_layer = git_hook_installed();
+    let claude_layer = claude_plugin_hook_path();
+    eprintln!();
+    eprintln!("slop: defense-in-depth status");
+    eprintln!(
+        "  git pre-commit hook (terminal `git commit`): {}",
+        if git_layer { "ACTIVE" } else { "MISSING" }
+    );
+    eprintln!(
+        "  Claude Code PreToolUse hook (agent `git commit`): {}",
+        match &claude_layer {
+            Some(p) => format!("ACTIVE — {}", p.display()),
+            None => "MISSING".to_string(),
+        }
+    );
+    if !git_layer {
+        eprintln!(
+            "  install: `slop install-hook` (this repo) or `slop install-hook --global` (every repo)"
+        );
+    }
+    if claude_layer.is_none() {
+        eprintln!(
+            "  install: in any Claude Code session run `/plugin marketplace add peeramid-labs/sloppoke` then `/plugin install sloppoke@peeramid-labs`"
+        );
+    }
+    if git_layer && claude_layer.is_some() {
+        eprintln!("  both layers active — agent + terminal `git commit` are gated. Bypass requires both `--no-verify` AND `SLOP_SKIP_HOOK=1`.");
+    } else {
+        eprintln!(
+            "  only one layer active — easy to bypass. Install the other so agents have to defeat two gates."
+        );
+    }
+}
+
+fn run_status() -> Result<()> {
+    print_defense_in_depth_summary();
     Ok(())
 }
 
