@@ -24,12 +24,28 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_SERVER: &str = "https://sloppoke.me";
 const CACHED_PLAN: &str = ".slop/last-poke.json";
 
+/// Long-form version string baked at build time. Includes the crate
+/// version, the git commit it was built from (`-dirty` if the
+/// working tree was modified), and the build timestamp (seconds since
+/// epoch, or whatever SOURCE_DATE_EPOCH was set to for reproducible
+/// builds). Operators verifying a downloaded binary can match the
+/// commit hash against the GitHub release page.
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (commit ",
+    env!("SLOP_BUILD_COMMIT"),
+    ", built ",
+    env!("SLOP_BUILD_EPOCH"),
+    ")"
+);
+
 #[derive(Parser, Debug)]
-#[command(name = "slop", version, about = "Blazing-fast AI-slop firewall.", disable_version_flag = true)]
+#[command(name = "slop", version, long_version = LONG_VERSION, about = "Blazing-fast AI-slop firewall.", disable_version_flag = true)]
 struct Cli {
     /// Print version and exit. Accepts `-v` lowercase, `-V` uppercase,
     /// and `--version` long-form so muscle memory from every other
-    /// CLI in the ecosystem just works.
+    /// CLI in the ecosystem just works. `-V` shows the long form
+    /// (commit + build epoch) — useful for supply-chain verification.
     #[arg(short = 'v', short_alias = 'V', long = "version", action = clap::ArgAction::Version)]
     version: (),
 

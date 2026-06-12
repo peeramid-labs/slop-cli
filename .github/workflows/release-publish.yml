@@ -262,6 +262,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       # v3 downloads each artifact into a subfolder named after it.
       # Pulling everything in one shot is simpler than per-name fan-out.
@@ -269,14 +271,85 @@ jobs:
         with:
           path: artifacts
 
+      # Consolidate per-binary checksums into one SHA256SUMS file at
+      # the release root + flatten the .sha256 sidecars into the
+      # release-files staging dir. Operators can either:
+      #   curl …/SHA256SUMS | sha256sum -c
+      # or fetch one binary + its sidecar:
+      #   sha256sum -c slop-v0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+      - name: Stage release files + emit SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          cp artifacts/binary-*/*.tar.gz release-files/
+          if compgen -G "artifacts/deb-*/*.deb" >/dev/null; then
+            cp artifacts/deb-*/*.deb release-files/
+          fi
+          # Rename per-target sidecars to '<archive-name>.sha256' so the
+          # `sha256sum -c <file>.sha256` convention works without args.
+          for archive in release-files/*.tar.gz; do
+            base=$(basename "$archive")
+            target_from_name=$(echo "$base" | sed -E 's/^slop-v[0-9]+\.[0-9]+\.[0-9]+-(.+)\.tar\.gz$/\1/')
+            sha=$(cat "artifacts/sha256-file-${target_from_name}/${target_from_name}.sha256")
+            echo "$sha  $base" > "release-files/${base}.sha256"
+          done
+          # Aggregate file in sha256sum -c format (one line per binary +
+          # one line per .deb). Reproducible from any single binary.
+          (
+            cd release-files
+            for f in *.tar.gz *.deb; do
+              [ -e "$f" ] || continue
+              sha256sum "$f"
+            done
+          ) > release-files/SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat release-files/SHA256SUMS
+
+      # Build provenance attestation — GitHub-signed Sigstore bundle
+      # for every release artifact. Users with `gh attestation verify`
+      # can confirm the binaries came from this exact workflow run on
+      # this exact commit. Free, keyless, no rotation work.
+      - name: Generate build provenance attestations
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            release-files/*.tar.gz
+            release-files/*.deb
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.tag.outputs.tag }}
           name: ${{ needs.tag.outputs.tag }}
-          body: ${{ needs.tag.outputs.changelog_body }}
+          body: |
+            ${{ needs.tag.outputs.changelog_body }}
+
+            ## Verify your download
+
+            Each binary ships with a `.sha256` sidecar and the release
+            root has a consolidated `SHA256SUMS`. Two verification
+            options:
+
+            **Per-file**:
+            ```
+            sha256sum -c slop-${{ needs.tag.outputs.tag }}-<target>.tar.gz.sha256
+            ```
+
+            **All files at once**:
+            ```
+            curl -fsSL https://github.com/peeramid-labs/sloppoke/releases/download/${{ needs.tag.outputs.tag }}/SHA256SUMS \
+              | sha256sum -c --ignore-missing
+            ```
+
+            **Build provenance** (keyless Sigstore via GitHub Actions):
+            ```
+            gh attestation verify slop-${{ needs.tag.outputs.tag }}-<target>.tar.gz \
+              --owner peeramid-labs
+            ```
           files: |
-            artifacts/binary-*/*.tar.gz
-            artifacts/deb-*/*.deb
+            release-files/*.tar.gz
+            release-files/*.deb
+            release-files/*.sha256
+            release-files/SHA256SUMS
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

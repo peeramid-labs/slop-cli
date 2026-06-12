@@ -22,6 +22,7 @@ recipe.
 - [Score a public GitHub repo](how-to/score-a-public-repo.md)
 - [Submit feedback to the learning loop](how-to/submit-feedback.md)
 - [Install from source](how-to/install-from-source.md)
+- [Verify the binary](how-to/verify-the-binary.md) — supply-chain checks (SHA-256, SHA256SUMS, Sigstore attestation)
 
 ## Reference — facts
 
