@@ -7,6 +7,7 @@ Adds three slash commands to Claude Code that wrap the `slop` CLI:
 | `/slop:poke` | runs `slop poke` against the current diff, reports the verdict |
 | `/slop:apply` | applies the cached cleanup patch (`--no-commit` by default to avoid amending pushed commits) |
 | `/slop:learn` | sends a one-line feedback note to tune detection for your account |
+| `/slop:install-hook` | installs the slop git pre-commit hook so terminal commits are gated too (`--global` for every repo) |
 
 Also bundles the canonical `slop.md` skill so the same "what does the verdict mean" context is available regardless of which command the user invokes.
 
