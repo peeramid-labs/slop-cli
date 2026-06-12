@@ -1,5 +1,37 @@
 
 
+
+## [0.8.0] - 2026-06-12
+
+### 🚀 Features
+
+- *(plugin)* V0.2.4 — /slop:install-hook slash command
+- *(plugin)* V0.2.5 — SessionStart tip nudges /slop:install-hook when git-level hook missing
+- *(cli)* Slop learn auto-attaches input diff + proposed patch from last poke
+- *(cli)* Slop status + defense-in-depth funnel via /slop:status
+- *(cli)* Supply-chain verification — checksums, attestation, version provenance
+- *(cli)* Slop learn body carries cli_version + build commit
+
+### 🐛 Bug Fixes
+
+- *(cli)* Accept -v / -V / --version, brand as 'slop' not 'sloppoke-cli'
+- *(plugin)* V0.2.1 — hook actually fires on macOS now
+- *(plugin)* V0.2.2 — trace log so 'is the hook actually firing' is answerable
+- *(plugin)* V0.2.3 — chdir into 'cd X &&' prefix before slop poke
+
+### 📚 Documentation
+
+- Diataxis-structured usage docs in docs/
+- Drop every 'regex' mention — never market the implementation
+- Swap ASCII diagrams for mermaid
+- *(privacy)* Add 'Does the CLI work without the server?' Q&A
+- Drop diataxis meta-narrative line — let structure speak
+- Rewrite Claude Code plugin how-to for v0.2.5 (2 hooks + 4 commands)
+
+### 🧪 Testing
+
+- *(cli)* Pair tests for cap_diff + load_plan fallback + attached_context
+
 ## [0.7.0] - 2026-06-11
 
 ### 🚀 Features
