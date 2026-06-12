@@ -49,10 +49,35 @@ extract_command() {
 
 cmd=$(extract_command)
 
-case "$cmd" in
-  *"git commit"*|*"git "*"commit"*) ;;
-  *) exit 0 ;;
-esac
+# Token-walk to detect a real `git commit` invocation, not just any
+# command that happens to contain the word "commit" in a flag value
+# (e.g. `slop apply --no-commit`, `git config -e commit.template`).
+# Find the first `git` token; skip option-style tokens (anything
+# starting with `-`); the next non-option token must be `commit`.
+is_git_commit() {
+  # shellcheck disable=SC2086
+  set -- $1
+  found_git=0
+  while [ $# -gt 0 ]; do
+    if [ "$found_git" -eq 0 ]; then
+      case "$1" in
+        git) found_git=1 ;;
+      esac
+      shift
+      continue
+    fi
+    case "$1" in
+      -*) shift; continue ;;
+      commit) return 0 ;;
+      *) return 1 ;;
+    esac
+  done
+  return 1
+}
+
+if ! is_git_commit "$cmd"; then
+  exit 0
+fi
 
 if ! command -v slop >/dev/null 2>&1; then
   exit 0
