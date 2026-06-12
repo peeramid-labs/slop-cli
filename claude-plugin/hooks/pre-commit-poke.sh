@@ -8,6 +8,16 @@
 
 set -u
 
+# Trace marker so the operator can confirm whether Claude Code is
+# actually invoking the hook at all. Writes one line per
+# invocation regardless of branch taken. Suppress with
+# SLOP_NO_HOOK_TRACE=1 once the hook is verified live.
+if [ "${SLOP_NO_HOOK_TRACE:-0}" != "1" ]; then
+  {
+    printf '%s pid=%s sloppoke pre-commit hook invoked\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$$"
+  } >> /tmp/sloppoke-hook-trace.log 2>/dev/null || true
+fi
+
 payload=$(cat)
 
 if [ "${SLOP_SKIP_HOOK:-0}" = "1" ]; then
