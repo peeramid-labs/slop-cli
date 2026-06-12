@@ -728,7 +728,7 @@ fn run_poke(args: PokeArgs) -> Result<()> {
             }
         }
     };
-    save_plan(&resp)?;
+    save_plan(&resp, &patch)?;
     // Verdict + quota line lives on stderr so it's visible to
     // interactive users (self-teaching, quota awareness) without
     // polluting `> foo.patch` redirections or `| git apply` pipes.
@@ -758,13 +758,20 @@ struct CachedPlan {
     /// Server-rendered unified diff. Preferred apply target.
     #[serde(default)]
     patch: String,
+    /// The exact diff the CLI sent to /api/v1/poke. Stored so
+    /// `slop learn` can attach BOTH the input the user was unhappy
+    /// with AND the output the server proposed — operator reading
+    /// the LearnLog gets the full before/after pair, not just the
+    /// server's response.
+    #[serde(default)]
+    input_diff: String,
     /// Legacy structured action list. Kept so a stale plan from an
     /// older server still applies via the action-walker fallback.
     #[serde(default)]
     cleanup_actions: Vec<CleanupAction>,
 }
 
-fn save_plan(r: &api::PokeResponse) -> Result<()> {
+fn save_plan(r: &api::PokeResponse, input_diff: &str) -> Result<()> {
     let dir = Path::new(".slop");
     if let Err(e) = fs::create_dir_all(dir) {
         eprintln!("slop: warning — could not create .slop dir: {e}");
@@ -774,6 +781,7 @@ fn save_plan(r: &api::PokeResponse) -> Result<()> {
         poke_id: r.poke_id.clone(),
         verdict: r.verdict.clone(),
         patch: r.patch.clone(),
+        input_diff: input_diff.to_string(),
         cleanup_actions: r
             .cleanup_actions
             .iter()
@@ -785,8 +793,39 @@ fn save_plan(r: &api::PokeResponse) -> Result<()> {
             })
             .collect(),
     };
-    fs::write(CACHED_PLAN, serde_json::to_string_pretty(&plan)?)?;
+    let serialised = serde_json::to_string_pretty(&plan)?;
+    fs::write(CACHED_PLAN, &serialised)?;
+    // Also write a per-user copy at ~/.config/slop/last-poke.json so
+    // `slop learn` can attach the most recent poke regardless of cwd.
+    // Best-effort: a failure here doesn't break `slop poke`.
+    if let Some(global) = global_last_poke_path() {
+        if let Some(parent) = global.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Err(e) = fs::write(&global, &serialised) {
+            eprintln!(
+                "slop: warning — could not write {}: {e}",
+                global.display()
+            );
+        }
+    }
     Ok(())
+}
+
+/// `~/.config/slop/last-poke.json` — per-user mirror of the repo-local
+/// `.slop/last-poke.json` so `slop learn` finds context even when run
+/// from a different cwd than `slop poke`.
+fn global_last_poke_path() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("SLOP_CONFIG_DIR") {
+        return Some(PathBuf::from(custom).join("last-poke.json"));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("slop")
+            .join("last-poke.json"),
+    )
 }
 
 // ── apply ────────────────────────────────────────────────────────
@@ -1182,8 +1221,35 @@ fn run_learn(args: LearnArgs) -> Result<()> {
 /// the reviewer sees what triggered the feedback without unbounded
 /// payload growth. Returns None when no plan is cached.
 fn load_plan() -> Result<CachedPlan> {
-    let raw = fs::read_to_string(CACHED_PLAN).with_context(|| format!("read {CACHED_PLAN}"))?;
+    // Try cwd-relative first; fall back to the per-user global mirror
+    // so `slop learn` from a different directory than `slop poke` still
+    // attaches context. Either path's read failure is fatal here —
+    // callers catch via `.ok()` to mean "no recent poke".
+    let local = PathBuf::from(CACHED_PLAN);
+    if local.exists() {
+        let raw = fs::read_to_string(&local).with_context(|| format!("read {CACHED_PLAN}"))?;
+        return Ok(serde_json::from_str(&raw)?);
+    }
+    let global = global_last_poke_path()
+        .with_context(|| format!("no {CACHED_PLAN} and no fallback path"))?;
+    let raw = fs::read_to_string(&global)
+        .with_context(|| format!("read {}", global.display()))?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+/// Truncate a unified diff to at most `max` bytes on a line boundary,
+/// appending a marker so the reviewer knows there's more.
+fn cap_diff(diff: &str, max: usize, label: &str) -> String {
+    if diff.len() <= max {
+        return diff.to_string();
+    }
+    let cut = diff[..max].rfind('\n').unwrap_or(max);
+    format!(
+        "{}\n... ({} truncated at {} bytes; see poke_id for full row)",
+        &diff[..cut],
+        label,
+        cut
+    )
 }
 
 fn attached_context_from_cached_plan() -> Option<String> {
@@ -1191,18 +1257,21 @@ fn attached_context_from_cached_plan() -> Option<String> {
     let mut out = String::new();
     out.push_str(&format!("poke_id: {}\n", plan.poke_id));
     out.push_str(&format!("verdict: {}\n", plan.verdict));
+    // Server-side LearnLog cap is 8 KB per entry. Split the budget
+    // between the input diff (what the user sent) and the proposed
+    // patch (what the server returned) so both fit. Asymmetric split:
+    // input is more important — without it the patch is opaque.
+    let input_budget = 5 * 1024usize;
+    let patch_budget = 2 * 1024usize;
+    if !plan.input_diff.trim().is_empty() {
+        out.push_str("--- input_diff ---\n");
+        out.push_str(&cap_diff(&plan.input_diff, input_budget, "input diff"));
+        out.push('\n');
+    }
     if !plan.patch.trim().is_empty() {
-        out.push_str("---\n");
-        // 8KB cap leaves room under the server's 1MB learn body
-        // limit even with a long feedback body alongside.
-        let max = 8 * 1024usize;
-        if plan.patch.len() > max {
-            let cut = plan.patch[..max].rfind('\n').unwrap_or(max);
-            out.push_str(&plan.patch[..cut]);
-            out.push_str("\n... (patch truncated; see poke_id for the full row)");
-        } else {
-            out.push_str(&plan.patch);
-        }
+        out.push_str("--- proposed_patch ---\n");
+        out.push_str(&cap_diff(&plan.patch, patch_budget, "proposed patch"));
+        out.push('\n');
     }
     Some(out)
 }
