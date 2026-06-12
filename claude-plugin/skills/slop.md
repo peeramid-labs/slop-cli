@@ -1,15 +1,33 @@
 ---
 name: slop
-description: Pre-commit AI-slop scan. Run `slop poke` on a staged diff. If it returns SLOP, apply the cleanup with `slop apply`. Submit feedback with `slop learn "<sentence>"`. Use BEFORE finalising any commit you'd otherwise push.
+description: Pre-commit AI-slop scan + DEBT-MARKER INJECTION. NOT a `clippy --fix` / `rustfmt` style rewriter — `slop apply` does NOT rewrite your logic. SafeDelete-tier hits get the offending line removed; everything semantic (questionable naming, untested branches, missing docstrings, etc.) gets a `TODO(slop): …` comment spliced ABOVE the line and the code is left intact. Those markers are visible debt — the catalog already pattern-matched (file, line, category); the agent's job after `slop apply` is to triage each marker (fix in-scope OR file as backlog), NEVER strip the marker as cleanup. Run `slop poke` before every commit. Submit feedback with `slop learn "<sentence>"`.
 when_to_use: Use before every commit. Especially when the change was authored or touched by an LLM. Always run after generating code.
 ---
 
 # slop — AI-slop firewall
 
-slop sweeps your diff through a blazing-fast machine-learning engine
-that knows what AI-generated code looks like — scaffolding residue,
+**Mental model: slop is debt-marker INJECTION, not a rewriter.** It
+is closer in shape to a pre-commit TODO-injector than to
+`clippy --fix` / `rustfmt` / `eslint --fix`. SafeDelete-tier hits
+(empty comment lines, hallucinated `console.log`, etc.) get the line
+deleted. Everything semantic — naming, missing docstrings, untested
+branches, suspicious bounds, redundant guards — gets a
+`TODO(slop): …` comment spliced ABOVE the offending line. **The code
+itself is left intact.** No logic is rewritten. No identifier is
+renamed. No body is reformatted.
+
+If you arrive expecting clippy semantics, stop and re-read that
+paragraph. Past agents have mistakenly classed the TODO markers as
+"noise" and tried to strip them. They are NOT noise. They are the
+breadcrumb that keeps known debt visible — without them the debt
+sinks back into the file volume and no one (human or LLM) will
+surface it again on re-read.
+
+slop sweeps your diff through a fast catalog-matching engine that
+knows what AI-generated code looks like — scaffolding residue,
 placeholder identifiers, defensive crud, half-finished markers,
-untested branches — and pulls it out before you ship. The engine
+untested branches, marketing adjectives in comments — and either
+strips it (SafeDelete) or marks it for triage (TODO). The engine
 adapts to your account through the `slop learn` channel: every
 correction you submit calibrates future scans for your codebase.
 
@@ -70,19 +88,29 @@ the CLI prints `git apply`'s reason. On success it stages the change
 and amends HEAD. Pass `--no-commit` to inspect the staged diff before
 committing.
 
-## What apply does to each hit
+## What apply does to each hit (read this before reacting to the diff)
 
-Server tiers every finding by safety, the CLI never invents fixes:
+Server tiers every finding by safety. **The CLI never rewrites logic
+and never renames identifiers.** Three outcomes:
 
-- **Safe-delete** (comment-line slop, empty console.log) → the line is
-  removed.
+- **Safe-delete** (comment-line slop, empty console.log, dead emoji
+  literal) → the line is removed. This is the only tier where source
+  bytes for *real code* leave the file.
 - **Todo** (anything semantically loaded — naming, branches without
-  tests, off-by-one bounds, redundant null checks) → a
-  `// TODO(slop): …` comment is spliced above the line in the file's
-  native comment syntax. Code is left intact. These markers are
-  **load-bearing signal** — see next section.
-- **Flag-only** (TODO/FIXME placeholders) → surfaced in the verdict
-  but no patch change. Nothing to mechanically fix.
+  tests, off-by-one bounds, redundant null checks, missing public-
+  item docstring, marketing adjective in a comment) → a
+  `// TODO(slop): <human reason>` comment is spliced **ABOVE** the
+  line in the file's native comment syntax. **The flagged line
+  itself is unchanged.** This is the dominant case. Expect most
+  apply diffs to be additions, not deletions.
+- **Flag-only** (raw `TODO`/`FIXME` placeholders) → surfaced in the
+  verdict but no patch change. Already a marker; nothing to splice.
+
+If you see `slop apply` add 501 TODO lines to a large change, that
+is the design working. **Do not** count the markers as "noise added
+to the diff." Count them as debt that was already hiding in the file
+volume and is now pinned to a precise line. See next section for the
+triage rule.
 
 If apply's preflight refuses the patch, the working tree is byte-
 identical to its pre-apply state. Re-running is safe.

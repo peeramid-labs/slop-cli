@@ -1,9 +1,13 @@
 ---
-description: Apply the last cached `slop poke` patch via `slop apply`
+description: Apply the last cached `slop poke` patch — splices TODO(slop) markers above semantic findings, strips SafeDelete tier. NOT a `clippy --fix` style rewriter; logic is never modified. Triage every spliced marker after.
 allowed-tools: Bash
 ---
 
 Apply the cached slop-poke patch produced by the most recent `/slop:poke` invocation.
+
+**Mental model — read first:** `slop apply` is debt-marker INJECTION, not source rewriting. Expect most of the diff to be `+// TODO(slop): …` additions above flagged lines. The flagged line itself is unchanged. SafeDelete tier (empty comments, hallucinated console.log) deletes the offending line outright. Nothing renames identifiers; nothing rewrites bodies.
+
+If the diff looks "noisy" (many TODOs added), that is the system working as designed — the catalog has converted hidden debt into precise (file, line, category) breadcrumbs. The triage step (next section) is the work, not the markers themselves.
 
 Default behaviour:
 ```

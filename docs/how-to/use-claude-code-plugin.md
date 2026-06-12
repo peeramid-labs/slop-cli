@@ -55,6 +55,21 @@ Run `/slop:install-hook` (current repo) or `/slop:install-hook --global`
 (every repo on the machine) when you're ready. See
 [install-pre-commit-hook](install-pre-commit-hook.md) for scope details.
 
+## Mental model: slop is a debt MARKER, not a rewriter
+
+Past agents have mistaken `slop apply` for a `clippy --fix` /
+`rustfmt` / `eslint --fix` class tool. It is not. `slop apply` does
+**not** rewrite logic, rename identifiers, or reformat bodies. It
+splices `// TODO(slop): …` comments **above** the flagged line and
+deletes lines only at SafeDelete tier (empty comment slop,
+hallucinated `console.log`, dead emoji, etc.). The flagged line
+itself stays exactly as written.
+
+If the diff looks "noisy" (many TODOs added), the catalog has
+converted debt that was hiding in the file volume into precise
+(file, line, category) breadcrumbs. **The markers are the value**,
+not the cost. Stripping them as cleanup defeats the entire purpose.
+
 ## Why the `TODO(slop):` markers matter
 
 When `slop apply` runs, two things happen:

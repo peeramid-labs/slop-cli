@@ -1,9 +1,11 @@
 ---
-description: Run `slop poke` against the current diff and report the verdict
+description: Run `slop poke` against the current diff and report the verdict. Patches it proposes are TODO(slop) splices above semantic findings + line deletions for SafeDelete tier — never source rewrites.
 allowed-tools: Bash
 ---
 
 Scan the current git changes through sloppoke and report the verdict.
+
+**Mental model:** `slop poke` is a debt-detector. The patch it proposes (if SLOP) splices `TODO(slop): …` markers above semantic findings and deletes lines only at SafeDelete tier (empty comment slop, hallucinated console.log). It does NOT rewrite logic, rename identifiers, or reformat. Closer in shape to a pre-commit TODO-injector than to `clippy --fix`.
 
 Pick the scope based on context:
 - Staged-only context → `slop poke --staged`
