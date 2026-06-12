@@ -1,5 +1,6 @@
 # sloppoke
 
+[![slop](https://sloppoke.me/badge/peeramid-labs/sloppoke)](https://sloppoke.me/?repo=peeramid-labs/sloppoke)
 [![Release](https://img.shields.io/github/v/release/peeramid-labs/sloppoke?label=release)](https://github.com/peeramid-labs/sloppoke/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Server: sloppoke.me](https://img.shields.io/badge/server-sloppoke.me-green.svg)](https://sloppoke.me/)
