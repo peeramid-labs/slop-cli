@@ -10,13 +10,16 @@ before `git commit`. This is deliberate.
 The cost of removing slop scales with how far down the pipeline you
 remove it:
 
-```
-edit (free)           ──────────────────  $1
-staged diff           ──────────────────  $1
-pull request          ───────────────────  $10
-merged commit         ──────────────────   $50
-production            ──────────────────   $500
-new-hire reading it   ──────────────────   "why is this here?"
+```mermaid
+flowchart LR
+    A["edit<br/>~$1"] --> B["staged diff<br/>~$1<br/>← slop poke here"]
+    B --> C["pull request<br/>~$10"]
+    C --> D["merged commit<br/>~$50"]
+    D --> E["production<br/>~$500"]
+    E --> F["new hire reads it<br/>'why is this here?'"]
+    style B fill:#1b3645,stroke:#6ee0d8,color:#ecf6f0
+    style E fill:#3a1a25,stroke:#ff85b1,color:#ecf6f0
+    style F fill:#3a1a25,stroke:#ff85b1,color:#ecf6f0
 ```
 
 Numbers are illustrative. Direction is not. Each step right adds:

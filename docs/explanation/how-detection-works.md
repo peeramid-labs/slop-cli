@@ -7,16 +7,14 @@ runs against.
 
 ## The fast path
 
-```
-your patch ──► slop CLI ──► HTTPS POST /api/v1/poke
-                            │
-                            ▼
-                   curated category catalog
-                   (~50 categories, language-aware)
-                            │
-                            ▼
-              hit list with category +
-              suggested cleanup
+```mermaid
+flowchart LR
+    A["your patch<br/>(git diff --staged)"] --> B["slop CLI"]
+    B -->|"HTTPS POST<br/>signed by your SSH key"| C["/api/v1/poke"]
+    C --> D["curated category catalog<br/>~50 categories, language-aware"]
+    D --> E["hit list<br/>+ suggested cleanup"]
+    style D fill:#142a36,stroke:#6ee0d8,color:#ecf6f0
+    style E fill:#1b3645,stroke:#ff85b1,color:#ecf6f0
 ```
 
 Steps:
@@ -59,21 +57,19 @@ wild.
 Detection accuracy improves over time via NSED Orchestrator, an
 asynchronous multi-model deliberation backend.
 
-```
-your `slop learn` feedback ──► LearnLog (server-side, EU-resident)
-                                       │
-                                       ▼
-                          ┌────────────────────────────┐
-                          │ NSED async deliberation     │
-                          │ ──────────────────────────  │
-                          │ • multi-model panel review │
-                          │ • category weight tuning   │
-                          │ • per-account corpus diffs │
-                          └──────────────┬──────────────┘
-                                         │
-                                         ▼
-                          per-account catalog updates
-                          land on the fast path next deploy
+```mermaid
+flowchart TD
+    A["slop learn feedback"] --> B["LearnLog<br/>(server-side, EU-resident)"]
+    B --> C["NSED async deliberation"]
+    C --> D["multi-model panel review"]
+    C --> E["category weight tuning"]
+    C --> F["per-account corpus diffs"]
+    D --> G["per-account catalog updates"]
+    E --> G
+    F --> G
+    G -->|"next deploy"| H["fast path"]
+    style C fill:#142a36,stroke:#a78bfa,color:#ecf6f0
+    style H fill:#1b3645,stroke:#6ee0d8,color:#ecf6f0
 ```
 
 What this means for you:
