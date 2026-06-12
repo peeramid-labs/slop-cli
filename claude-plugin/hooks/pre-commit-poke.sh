@@ -58,6 +58,20 @@ if ! command -v slop >/dev/null 2>&1; then
   exit 0
 fi
 
+# Claude Code fires PreToolUse from the SESSION cwd, not from the
+# command's effective cwd. Commands shaped 'cd /path && git commit'
+# would otherwise run slop poke in the wrong directory and find
+# nothing staged. Walk a leading 'cd X &&' / 'cd X ;' prefix and
+# chdir into it before invoking slop.
+target_dir=$(printf '%s' "$cmd" | sed -n 's|^[[:space:]]*cd[[:space:]]\{1,\}\([^[:space:]&;|]\{1,\}\).*|\1|p' | head -1)
+if [ -n "$target_dir" ]; then
+  # Strip surrounding single / double quotes.
+  target_dir=$(printf '%s' "$target_dir" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  if [ -d "$target_dir" ]; then
+    cd "$target_dir" || exit 0
+  fi
+fi
+
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   exit 0
 fi
