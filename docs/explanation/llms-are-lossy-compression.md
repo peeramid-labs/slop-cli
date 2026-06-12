@@ -188,12 +188,7 @@ what lets it run on every commit without making you wait.
 
 ## Further reading
 
-- Chiang, T. (2023). *ChatGPT Is a Blurry JPEG of the Web.*
-  *The New Yorker.*
-  <https://www.newyorker.com/tech/annals-of-technology/chatgpt-is-a-blurry-jpeg-of-the-web>
-- Delétang, G. et al. (2023). *Language Modeling Is Compression.*
-  arXiv:2309.10668.
-- Ji, Z. et al. (2023). *Survey of Hallucination in Natural Language
-  Generation.* ACM Computing Surveys 55(12).
-- Shumailov, I. et al. (2023). *The Curse of Recursion: Training on
-  Generated Data Makes Models Forget.* arXiv:2305.17493.
+- Chiang, T. (2023). [*ChatGPT Is a Blurry JPEG of the Web*](https://www.newyorker.com/tech/annals-of-technology/chatgpt-is-a-blurry-jpeg-of-the-web). *The New Yorker.*
+- Delétang, G. et al. (2023). [*Language Modeling Is Compression*](https://arxiv.org/abs/2309.10668). arXiv:2309.10668.
+- Ji, Z. et al. (2023). [*Survey of Hallucination in Natural Language Generation*](https://dl.acm.org/doi/10.1145/3571730). ACM Computing Surveys 55(12).
+- Shumailov, I. et al. (2023). [*The Curse of Recursion: Training on Generated Data Makes Models Forget*](https://arxiv.org/abs/2305.17493). arXiv:2305.17493.
