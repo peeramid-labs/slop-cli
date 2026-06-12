@@ -207,6 +207,10 @@ struct LearnBody<'a> {
     context: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<&'a str>,
+    /// Self-reported CLI version + build commit. Lets the offline RL
+    /// loop tell rows from old clients (missing auto-attach, etc.)
+    /// from rows from current clients. Server stores verbatim.
+    cli_version: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,10 +231,20 @@ pub fn learn(
     context: Option<&str>,
     project: Option<&str>,
 ) -> Result<LearnResponse> {
+    // Concatenate package version + build commit so a row tells the
+    // operator both 'which release' and 'which build of that release'.
+    // Same string the user sees from `slop --version`.
+    let cli_version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (commit ",
+        env!("SLOP_BUILD_COMMIT"),
+        ")"
+    );
     let body = LearnBody {
         text,
         context,
         project,
+        cli_version,
     };
     let json = serde_json::to_vec(&body)?;
     let resp = signed_request(cfg, "POST", "/api/v1/learn", &json)?;
