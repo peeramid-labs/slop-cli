@@ -31,7 +31,7 @@ Verify:
 slop --version
 ```
 
-You should see something like `slop 0.7.0`.
+You should see something like `slop 0.8.1 (commit abc1234, built 2026-06-11)`.
 
 ## 2. Log in
 
@@ -114,13 +114,73 @@ manually:
 git commit -m "your message"
 ```
 
+## 7. Install the git pre-commit hook
+
+Manual scans work, but they only fire when *you* remember. The
+pre-commit hook runs `slop poke --staged` on every `git commit` —
+whether you typed it, your IDE typed it, or a coding agent shelled
+out and typed it. This is the gate.
+
+For the current repo:
+
+```sh
+slop install-hook
+```
+
+You should see:
+
+```
+slop install-hook: installed at .git/hooks/pre-commit
+defense-in-depth status:
+  [ACTIVE] git pre-commit hook (.git/hooks/pre-commit)
+  [MISSING] Claude Code PreToolUse hook
+```
+
+For every repo on the machine (recommended once you trust it):
+
+```sh
+slop install-hook --global
+```
+
+Try it — make another small edit, stage it, and commit. The hook
+will print the verdict. A clean diff commits silently; slop blocks
+the commit until you fix it or pass `--no-verify` (don't).
+
+## 8. Add the Claude Code layer
+
+If you let Claude Code drive `git commit` through the Bash tool, the
+git hook still catches it — but you want the verdict *before* Claude
+spends tokens drafting the commit message. Install the plugin:
+
+```
+/plugin install sloppoke@peeramid-labs
+```
+
+Then verify both gates are live:
+
+```sh
+slop status
+```
+
+You should see:
+
+```
+defense-in-depth status:
+  [ACTIVE] git pre-commit hook
+  [ACTIVE] Claude Code PreToolUse hook
+```
+
+Two ACTIVE lines is the target. Coding agents have to defeat **both**
+gates (`--no-verify` for git AND `SLOP_SKIP_HOOK=1` for Claude) to
+ship slop past you.
+
 ## What now
 
 You now have the basics. Pick a how-to next:
 
-- [Install the pre-commit hook](../how-to/install-pre-commit-hook.md)
-  so every commit runs `slop poke` automatically.
 - [Gate a pull request in CI](../how-to/gate-a-pull-request-in-ci.md)
   to catch slop your team didn't.
-- [Use the Claude Code plugin](../how-to/use-claude-code-plugin.md) to
-  gate every `git commit` your agent attempts.
+- [Score a public GitHub repo](../how-to/score-a-public-repo.md) to
+  see how `slop` reads code at scale.
+- [Submit feedback to the learning loop](../how-to/submit-feedback.md)
+  when slop is wrong — the next catalog release will be sharper.
