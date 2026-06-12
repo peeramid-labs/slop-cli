@@ -1473,6 +1473,109 @@ mod tests {
         assert_eq!(out, "HEAD~0..HEAD");
     }
 
+    // ── cap_diff (no env mutation) ─────────────────────────────
+
+    #[test]
+    fn cap_diff_returns_input_unchanged_when_under_budget() {
+        let input = "small diff content\nline 2\n";
+        let out = cap_diff(input, 4096, "test");
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn cap_diff_truncates_to_line_boundary_with_marker() {
+        let mut input = String::new();
+        for i in 0..200 {
+            input.push_str(&format!("+ line number {i}\n"));
+        }
+        let max = 500;
+        let out = cap_diff(&input, max, "test");
+        assert!(out.contains("test truncated"), "marker missing: {out}");
+        // Body before the marker must end on a line boundary so the
+        // truncated unified diff stays parseable downstream.
+        let marker_at = out.find("\n... (").expect("marker present");
+        let body = &out[..marker_at];
+        assert!(
+            body.is_empty() || body.ends_with('\n') || body.chars().rev().next() != Some(' '),
+            "body should land on a line boundary: tail={:?}",
+            &body[body.len().saturating_sub(40)..]
+        );
+    }
+
+    /// Single-test serialization for cwd / env mutating cases.
+    /// global_last_poke_path + load_plan + attached_context all
+    /// touch SLOP_CONFIG_DIR + chdir; parallel test exec mangles
+    /// process-global state. Same pattern news::tests uses.
+    #[test]
+    fn cached_plan_roundtrip_and_attach_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prev_dir = std::env::current_dir().unwrap();
+        let prev_cfg = std::env::var("SLOP_CONFIG_DIR").ok();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let global_dir = tmp.path().join("global-config");
+        std::env::set_var("SLOP_CONFIG_DIR", &global_dir);
+
+        // 1. global_last_poke_path honours SLOP_CONFIG_DIR.
+        let p = global_last_poke_path().expect("path resolves");
+        assert_eq!(p, global_dir.join("last-poke.json"));
+
+        // 2. load_plan falls back to global when no cwd-local plan.
+        std::fs::create_dir_all(&global_dir).unwrap();
+        let global_plan = CachedPlan {
+            poke_id: "fallback-id".into(),
+            verdict: "SLOP".into(),
+            patch: "diff body".into(),
+            input_diff: "input body".into(),
+            cleanup_actions: Vec::new(),
+        };
+        std::fs::write(
+            global_dir.join("last-poke.json"),
+            serde_json::to_string(&global_plan).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_plan().expect("global plan loads");
+        assert_eq!(loaded.poke_id, "fallback-id");
+        assert_eq!(loaded.input_diff, "input body");
+
+        // 3. cwd-local plan beats global.
+        std::fs::create_dir_all(".slop").unwrap();
+        let local_plan = CachedPlan {
+            poke_id: "local-id".into(),
+            verdict: "LGTM".into(),
+            patch: String::new(),
+            input_diff: String::new(),
+            cleanup_actions: Vec::new(),
+        };
+        std::fs::write(CACHED_PLAN, serde_json::to_string(&local_plan).unwrap()).unwrap();
+        let loaded = load_plan().expect("local plan loads");
+        assert_eq!(loaded.poke_id, "local-id");
+
+        // 4. attached_context_from_cached_plan splices BOTH the
+        //    input diff and the proposed patch under their labelled
+        //    fences so the operator gets the full before/after pair.
+        let ctx_plan = CachedPlan {
+            poke_id: "ctx-id".into(),
+            verdict: "SLOP".into(),
+            patch: "+// TODO(slop): demo\n".into(),
+            input_diff: "@@ -1 +1 @@\n+let x = 1;\n".into(),
+            cleanup_actions: Vec::new(),
+        };
+        std::fs::write(CACHED_PLAN, serde_json::to_string(&ctx_plan).unwrap()).unwrap();
+        let ctx = attached_context_from_cached_plan().expect("context builds");
+        assert!(ctx.contains("poke_id: ctx-id"), "missing poke_id");
+        assert!(ctx.contains("--- input_diff ---"), "missing input header");
+        assert!(ctx.contains("let x = 1"), "missing input body");
+        assert!(ctx.contains("--- proposed_patch ---"), "missing patch header");
+        assert!(ctx.contains("TODO(slop)"), "missing patch body");
+
+        // Restore process state.
+        std::env::set_current_dir(prev_dir).unwrap();
+        match prev_cfg {
+            Some(v) => std::env::set_var("SLOP_CONFIG_DIR", v),
+            None => std::env::remove_var("SLOP_CONFIG_DIR"),
+        }
+    }
+
     #[test]
     fn hook_script_has_marker_for_overwrite_detection() {
         // run_install_hook reads existing files looking for our
