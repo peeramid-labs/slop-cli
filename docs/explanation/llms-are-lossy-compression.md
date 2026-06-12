@@ -174,7 +174,7 @@ What that buys you:
   context for the next round. The AI's input next session is the
   cleaned version, not the artifacted one.
 - **Deterministic verdict.** Same staged diff → same finding, every
-  time. The catalog is regex + AST, not another LLM. Reproducible.
+  time. Reproducible.
 - **Sub-10ms.** Cheap enough to run on every commit. The model in the
   loop is for *generation*; the gate is for *verification*.
 - **Pre-commit, not pre-merge.** Stops the residue before it lands in
