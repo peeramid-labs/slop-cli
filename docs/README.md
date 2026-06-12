@@ -4,9 +4,6 @@ The `slop` CLI catches AI-generated noise — defensive bloat, narrative
 comments, untested branches, hallucinated imports — at the commit
 boundary, before it lands in your repo.
 
-These docs follow the [Diátaxis](https://diataxis.fr) framework. Four
-sections, four jobs.
-
 ## Tutorials — learn by doing
 
 For new users. Single linear path. Every step verified.
