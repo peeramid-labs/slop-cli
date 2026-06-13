@@ -948,10 +948,7 @@ fn save_plan(r: &api::PokeResponse, input_diff: &str) -> Result<()> {
             let _ = fs::create_dir_all(parent);
         }
         if let Err(e) = fs::write(&global, &serialised) {
-            eprintln!(
-                "slop: warning — could not write {}: {e}",
-                global.display()
-            );
+            eprintln!("slop: warning — could not write {}: {e}", global.display());
         }
     }
     Ok(())
@@ -1377,8 +1374,7 @@ fn load_plan() -> Result<CachedPlan> {
     }
     let global = global_last_poke_path()
         .with_context(|| format!("no {CACHED_PLAN} and no fallback path"))?;
-    let raw = fs::read_to_string(&global)
-        .with_context(|| format!("read {}", global.display()))?;
+    let raw = fs::read_to_string(&global).with_context(|| format!("read {}", global.display()))?;
     Ok(serde_json::from_str(&raw)?)
 }
 
@@ -1710,7 +1706,10 @@ mod tests {
         assert!(ctx.contains("poke_id: ctx-id"), "missing poke_id");
         assert!(ctx.contains("--- input_diff ---"), "missing input header");
         assert!(ctx.contains("let x = 1"), "missing input body");
-        assert!(ctx.contains("--- proposed_patch ---"), "missing patch header");
+        assert!(
+            ctx.contains("--- proposed_patch ---"),
+            "missing patch header"
+        );
         assert!(ctx.contains("TODO(slop)"), "missing patch body");
 
         // Restore process state.
