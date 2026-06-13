@@ -3,6 +3,28 @@
 
 
 
+
+## [0.8.3] - 2026-06-13
+
+### 🐛 Bug Fixes
+
+- *(hooks)* MARKED tier passes the pre-commit gate
+
+### 📚 Documentation
+
+- Explanation/llms-are-lossy-compression — rationale page
+- Hyperlink references in lossy-compression article
+- Drop regex+AST mention — say deterministic only
+- *(tutorials)* Add hooks install as steps 7+8 of first-poke
+- *(plugin)* TODO(slop) markers are an action queue, not noise
+- *(plugin)* Reframe slop as debt-marker injector, not a rewriter
+- *(readme)* Add slop badge for sloppoke itself + score-public-repo guide
+- *(readme)* Use .svg suffix on badge URL for camo content-type hint
+
+### 🎨 Styling
+
+- *(cli)* Cargo fmt — pre-existing drift CI now catches
+
 ## [0.8.2] - 2026-06-12
 
 ### 🐛 Bug Fixes
