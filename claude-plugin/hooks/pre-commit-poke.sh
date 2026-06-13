@@ -101,13 +101,25 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   exit 0
 fi
 
-# slop poke --staged on v0.7+ writes the patch to stdout (or empty
-# on LGTM) and the verdict to stderr. Exit code is 0 either way; the
-# stdout content is the signal. Older builds also stuffed a verdict
-# line into stdout, so accept either: empty stdout → LGTM. Anything
-# else → SLOP and block.
-patch=$(slop poke --staged 2>/dev/null)
+# Three verdict tiers from `slop poke`:
+#   LGTM   — no findings. Pass.
+#   MARKED — findings exist but every TODO splice is already in source
+#            (render_patch produced no actionable hunks). Nothing to
+#            fix; pass.
+#   SLOP   — findings + a real patch to apply. Block.
+#
+# Server v0.7+ ships the verdict tier on stderr as
+#   "slop poke: LGTM (…)"  /  "slop poke: MARKED — N hit… (…)"  /
+#   "slop poke: SLOP — N hits (…)"
+# Patch on stdout is empty for LGTM, empty for MARKED, non-empty for
+# SLOP. Match the tier explicitly so a future render_patch quirk
+# (header-only emission, etc.) doesn't cause a MARKED to look like
+# a SLOP and block the commit.
+verdict_tmp=$(mktemp -t sloppoke-verdict.XXXXXX)
+patch=$(slop poke --staged 2>"$verdict_tmp")
 slop_rc=$?
+verdict=$(cat "$verdict_tmp" 2>/dev/null)
+rm -f "$verdict_tmp"
 
 if [ $slop_rc -ne 0 ]; then
   # Real error (network / auth / quota) — don't block, slop poke
@@ -115,6 +127,14 @@ if [ $slop_rc -ne 0 ]; then
   exit 0
 fi
 
+case "$verdict" in
+  *"slop poke: LGTM"*|*"slop poke: MARKED"*)
+    exit 0
+    ;;
+esac
+
+# Fall through covers SLOP plus any verdict we don't recognise. Only
+# block when there's an actionable patch to surface.
 if [ -z "${patch}" ]; then
   exit 0
 fi

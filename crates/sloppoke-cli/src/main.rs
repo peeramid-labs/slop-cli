@@ -275,11 +275,21 @@ if git diff --cached --quiet; then
 fi
 
 set +e
-# Drop stderr (the 'slop poke: LGTM/SLOP — N hits' verdict line
-# lives there). stdout carries the signal: empty = LGTM,
-# non-empty = SLOP patch we should surface to the user.
-output=$(slop poke --staged 2>/dev/null)
+# Three verdict tiers (server-side):
+#   LGTM   — no findings.
+#   MARKED — findings exist but every TODO splice is already in source.
+#            Nothing actionable. Treat as pass.
+#   SLOP   — findings + non-empty patch. Block.
+# Stderr carries the verdict line ("slop poke: LGTM" / "slop poke:
+# MARKED — N hit…" / "slop poke: SLOP — N hits"); stdout carries the
+# patch (empty on LGTM/MARKED, non-empty on SLOP). Match the tier on
+# stderr so a future header-only-render quirk in MARKED doesn't look
+# like SLOP and block a commit with nothing to apply.
+verdict_tmp=$(mktemp -t sloppoke-verdict.XXXXXX)
+output=$(slop poke --staged 2>"$verdict_tmp")
 status=$?
+verdict=$(cat "$verdict_tmp" 2>/dev/null)
+rm -f "$verdict_tmp"
 set -e
 
 if [ "$status" -ne 0 ]; then
@@ -287,7 +297,12 @@ if [ "$status" -ne 0 ]; then
   exit 1
 fi
 
-# slop poke prints the unified-diff patch to stdout on SLOP, empty on LGTM.
+case "$verdict" in
+  *"slop poke: LGTM"*|*"slop poke: MARKED"*)
+    exit 0
+    ;;
+esac
+
 if [ -n "$output" ]; then
   echo "$output"
   echo "" >&2
