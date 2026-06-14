@@ -472,7 +472,7 @@ fn print_defense_in_depth_summary() {
     }
     if claude_layer.is_none() {
         eprintln!(
-            "  install: in any Claude Code session run `/plugin marketplace add peeramid-labs/sloppoke` then `/plugin install sloppoke@peeramid-labs`"
+            "  install: in any Claude Code session run `/plugin marketplace add peeramid-labs/plugin-marketplace` then `/plugin install sloppoke@peeramid-labs`"
         );
     }
     if git_layer && claude_layer.is_some() {

@@ -15,7 +15,7 @@ once.
 In any Claude Code session:
 
 ```text
-/plugin marketplace add peeramid-labs/sloppoke
+/plugin marketplace add peeramid-labs/plugin-marketplace
 /plugin install sloppoke@peeramid-labs
 ```
 
